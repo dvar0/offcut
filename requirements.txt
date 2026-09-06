@@ -1,0 +1,3 @@
+# Install into the ComfyUI Python environment; inference dependencies come from
+# that checkout's requirements.txt and a CUDA or ROCm PyTorch installation.
+Pillow>=10.0

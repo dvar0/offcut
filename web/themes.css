@@ -1,0 +1,458 @@
+/* Palettes live here so a theme is one block plus a catalog row in themes.js.
+   Semantic aliases (--black, --panel, --amber, …) are derived once on html, so
+   the rest of the UI never mentions a theme id.
+
+   A new palette has to keep the surface ladder actually stepping. Nine of the
+   ten themes here once set --theme-chat-user-bg to the same value as
+   --theme-abyss-light, which is the chat panel it is drawn on, so the user's
+   own turns were invisible everywhere except offcut-dark. Contrast ratios each
+   theme is expected to hold, all against --theme-abyss-light unless stated:
+
+     --theme-chat-user-bg      >= 1.20   (the bubble fill)
+     --theme-chat-user-border  >= 1.55   (its edge, which carries a pale fill)
+     --theme-mid-gray          >= 1.45   (--line: every panel and section rule)
+     --theme-abyss-light       >= 1.07   vs --theme-abyss (panel off the page)
+     --theme-code-bg           >= 1.08   (--raised: inputs, code, table heads)
+     --theme-panel-flash       >= 1.08   vs --theme-code-bg (--raised-2)
+     --theme-dim-gray          >= 4.5    (--muted, read as body-adjacent text)
+     --theme-input-placeholder >= 3.0    (--faint)
+
+   everforest-dark and periwinkle-owl-dark run --theme-code-bg *below* the panel
+   as a recessed well rather than a raised one; that reads fine and the ratio is
+   what matters, not the direction. */
+
+html {
+  --black: var(--theme-abyss);
+  --panel: var(--theme-abyss-light);
+  --raised: var(--theme-code-bg);
+  --raised-2: var(--theme-panel-flash);
+  --line: var(--theme-mid-gray);
+  --line-strong: color-mix(in srgb, var(--theme-mid-gray) 72%, var(--theme-alabaster));
+  --text: var(--theme-alabaster);
+  --muted: var(--theme-dim-gray);
+  --faint: var(--theme-input-placeholder);
+  --amber: var(--theme-amber);
+  --amber-hot: color-mix(in srgb, var(--theme-amber) 70%, var(--theme-alabaster));
+  --amber-soft: var(--theme-amber-glow);
+  --green: var(--theme-success);
+  --red: var(--theme-danger);
+  --on-accent: var(--theme-accent-contrast);
+  --input-bg: color-mix(in srgb, var(--theme-abyss) 78%, var(--theme-code-bg));
+  --hover: color-mix(in srgb, var(--theme-abyss) 55%, var(--theme-panel-flash));
+  --canvas-bg: color-mix(in srgb, var(--theme-abyss) 90%, var(--theme-code-bg));
+  --canvas-dot: var(--theme-mid-gray);
+  --placeholder: var(--theme-input-placeholder);
+  --warning: var(--theme-warning);
+  --frosted: var(--theme-frosted);
+  --code-bg: var(--theme-code-bg);
+  --link: var(--theme-amber);
+  --diff-add: var(--theme-success);
+  --diff-del: var(--theme-danger);
+  --chat-user-bg: var(--theme-chat-user-bg);
+  --chat-user-border: var(--theme-chat-user-border);
+  --chat-assistant-bg: var(--theme-chat-assistant-bg);
+  --chat-tool-bg: var(--theme-chat-tool-bg);
+  --overlay: color-mix(in srgb, var(--theme-veil) 82%, transparent);
+  --shadow: color-mix(in srgb, var(--theme-veil) 55%, transparent);
+  --accent-dim: var(--theme-amber-dim);
+  --selection-bg: var(--theme-selection-bg);
+  --selection-fg: var(--theme-selection-fg);
+  --scrollbar-thumb: var(--theme-scrollbar-thumb);
+  --scrollbar-track: var(--theme-scrollbar-track);
+}
+
+html[data-scheme="dark"] {
+  color-scheme: dark;
+  --canvas-bg: color-mix(in srgb, var(--theme-abyss) 80%, #000000);
+  --overlay: color-mix(in srgb, #000000 82%, transparent);
+  --shadow: color-mix(in srgb, #000000 55%, transparent);
+}
+html[data-scheme="light"] {
+  color-scheme: light;
+  --canvas-bg: color-mix(in srgb, var(--theme-abyss) 86%, var(--theme-mid-gray));
+  --overlay: color-mix(in srgb, var(--theme-veil) 50%, transparent);
+  --shadow: color-mix(in srgb, var(--theme-veil) 22%, transparent);
+}
+
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
+
+:root,
+[data-theme="offcut-dark"] {
+  color-scheme: dark;
+  --theme-abyss: #050505;
+  --theme-abyss-light: #121211;
+  --theme-amber: #d9842f;
+  --theme-amber-dim: #8a5a22;
+  --theme-amber-glow: rgba(217, 132, 47, 0.12);
+  --theme-pure-blue: #6e8faf;
+  --theme-pure-blue-dim: #4a6580;
+  --theme-alabaster: #f4f1ea;
+  --theme-paper: #f4f1ea;
+  --theme-dim-gray: #8c8a84;
+  --theme-mid-gray: #333331;
+  --theme-danger: #d6614e;
+  --theme-success: #81a66f;
+  --theme-warning: #d3a06f;
+  --theme-accent-contrast: #050505;
+  --theme-veil: #030303;
+  --theme-focus: #f4f1ea;
+  --theme-scrollbar-thumb: #d9842f;
+  --theme-scrollbar-track: #050505;
+  --theme-selection-bg: #d9842f;
+  --theme-selection-fg: #050505;
+  --theme-panel-flash: #262624;
+  --theme-input-placeholder: #66655f;
+  --theme-code-bg: #1c1c1a;
+  --theme-blockquote-border: #8a5a22;
+  --theme-blockquote-text: #c8c5be;
+  --theme-frosted: rgba(5, 5, 5, 0.96);
+  --theme-chat-user-bg: #2c2926;
+  --theme-chat-user-border: #45403a;
+  --theme-chat-tool-bg: #1c1c1a;
+  --theme-chat-tool-border: #333331;
+  --theme-chat-assistant-bg: rgba(217, 132, 47, 0.14);
+  --theme-chat-assistant-border: #d9842f;
+  --theme-chat-assistant-text: #f4f1ea;
+}
+
+[data-theme="offcut-light"] {
+  color-scheme: light;
+  --theme-abyss: #f3efe6;
+  --theme-abyss-light: #e9e4d8;
+  --theme-amber: #b56a1f;
+  --theme-amber-dim: #8a5018;
+  --theme-amber-glow: rgba(181, 106, 31, 0.14);
+  --theme-pure-blue: #3f5f7a;
+  --theme-pure-blue-dim: #2c4558;
+  --theme-alabaster: #1c1b18;
+  --theme-paper: #faf7f0;
+  --theme-dim-gray: #67645b;
+  --theme-mid-gray: #bfb9a8;
+  --theme-danger: #b54a3a;
+  --theme-success: #4f7a45;
+  --theme-warning: #9a6a24;
+  --theme-accent-contrast: #faf7f0;
+  --theme-veil: #1c1b18;
+  --theme-focus: #1c1b18;
+  --theme-scrollbar-thumb: #b56a1f;
+  --theme-scrollbar-track: #e9e4d8;
+  --theme-selection-bg: #b56a1f;
+  --theme-selection-fg: #faf7f0;
+  --theme-panel-flash: #d2cbb9;
+  --theme-input-placeholder: #837f74;
+  --theme-code-bg: #ddd7c8;
+  --theme-blockquote-border: #c4aa7a;
+  --theme-blockquote-text: #5c564c;
+  --theme-frosted: rgba(243, 239, 230, 0.94);
+  --theme-chat-user-bg: #d0c8b4;
+  --theme-chat-user-border: #aaa189;
+  --theme-chat-tool-bg: #ddd7c8;
+  --theme-chat-tool-border: #bfb9a8;
+  --theme-chat-assistant-bg: #efe4d2;
+  --theme-chat-assistant-border: #b56a1f;
+  --theme-chat-assistant-text: #1c1b18;
+}
+
+[data-theme="oracle"] {
+  color-scheme: dark;
+  --theme-abyss: #050505;
+  --theme-abyss-light: #131313;
+  --theme-amber: #ffb000;
+  --theme-amber-dim: #8a6000;
+  --theme-amber-glow: rgba(255, 176, 0, 0.2);
+  --theme-pure-blue: #0000ff;
+  --theme-pure-blue-dim: #0000aa;
+  --theme-alabaster: #f5f5f5;
+  --theme-paper: #f5f5f5;
+  --theme-dim-gray: #858585;
+  --theme-mid-gray: #383838;
+  --theme-danger: #ef4444;
+  --theme-success: #4ade80;
+  --theme-warning: #facc15;
+  --theme-accent-contrast: #050505;
+  --theme-veil: #050505;
+  --theme-focus: #f5f5f5;
+  --theme-scrollbar-thumb: #ffb000;
+  --theme-scrollbar-track: #050505;
+  --theme-selection-bg: #ffb000;
+  --theme-selection-fg: #050505;
+  --theme-panel-flash: #282828;
+  --theme-input-placeholder: #6a6a6a;
+  --theme-code-bg: #1e1e1e;
+  --theme-blockquote-border: #8a6000;
+  --theme-blockquote-text: #caa34d;
+  --theme-frosted: rgba(5, 5, 5, 0.72);
+  --theme-chat-user-bg: #2b2722;
+  --theme-chat-user-border: #453e35;
+  --theme-chat-tool-bg: #1a1a1a;
+  --theme-chat-tool-border: #383838;
+  --theme-chat-assistant-bg: rgba(255, 176, 0, 0.24);
+  --theme-chat-assistant-border: #ffb000;
+  --theme-chat-assistant-text: #ffb000;
+}
+
+[data-theme="nous"] {
+  color-scheme: light;
+  --theme-abyss: #f6fbff;
+  --theme-abyss-light: #e4eff9;
+  --theme-amber: #0088cc;
+  --theme-amber-dim: #1f6287;
+  --theme-amber-glow: rgba(0, 136, 204, 0.12);
+  --theme-pure-blue: #0f3550;
+  --theme-pure-blue-dim: #174867;
+  --theme-alabaster: #0f3550;
+  --theme-paper: #ffffff;
+  --theme-dim-gray: #52697d;
+  --theme-mid-gray: #b0c7db;
+  --theme-danger: #c14949;
+  --theme-success: #1b8f6a;
+  --theme-warning: #a86a00;
+  --theme-accent-contrast: #f6fbff;
+  --theme-veil: #0d1c2a;
+  --theme-focus: #0f3550;
+  --theme-scrollbar-thumb: #0088cc;
+  --theme-scrollbar-track: #e4eff9;
+  --theme-selection-bg: #0088cc;
+  --theme-selection-fg: #f6fbff;
+  --theme-panel-flash: #c8dcee;
+  --theme-input-placeholder: #6f8598;
+  --theme-code-bg: #d6e6f4;
+  --theme-blockquote-border: #70a8cf;
+  --theme-blockquote-text: #35556d;
+  --theme-frosted: rgba(255, 255, 255, 0.78);
+  --theme-chat-user-bg: #c2d9ee;
+  --theme-chat-user-border: #96b5d0;
+  --theme-chat-tool-bg: #d6e6f4;
+  --theme-chat-tool-border: #b0c7db;
+  --theme-chat-assistant-bg: #c6e4f6;
+  --theme-chat-assistant-border: #0070ab;
+  --theme-chat-assistant-text: #0b314b;
+}
+
+[data-theme="everforest-dark"] {
+  color-scheme: dark;
+  --theme-abyss: #2d353b;
+  --theme-abyss-light: #343f44;
+  --theme-amber: #a7c080;
+  --theme-amber-dim: #7a8478;
+  --theme-amber-glow: rgba(167, 192, 128, 0.16);
+  --theme-pure-blue: #7fbbb3;
+  --theme-pure-blue-dim: #3a515d;
+  --theme-alabaster: #d3c6aa;
+  --theme-paper: #d3c6aa;
+  --theme-dim-gray: #a3afa6;
+  --theme-mid-gray: #525c62;
+  --theme-danger: #e67e80;
+  --theme-success: #a7c080;
+  --theme-warning: #dbbc7f;
+  --theme-accent-contrast: #2d353b;
+  --theme-veil: #232a2e;
+  --theme-focus: #d3c6aa;
+  --theme-scrollbar-thumb: #a7c080;
+  --theme-scrollbar-track: #232a2e;
+  --theme-selection-bg: #543a48;
+  --theme-selection-fg: #d3c6aa;
+  --theme-panel-flash: #3d484d;
+  --theme-input-placeholder: #859289;
+  --theme-code-bg: #232a2e;
+  --theme-blockquote-border: #7a8478;
+  --theme-blockquote-text: #a6b58a;
+  --theme-frosted: rgba(35, 42, 46, 0.76);
+  --theme-chat-user-bg: #465355;
+  --theme-chat-user-border: #66716b;
+  --theme-chat-tool-bg: #3d484d;
+  --theme-chat-tool-border: #4f585e;
+  --theme-chat-assistant-bg: rgba(66, 80, 71, 0.88);
+  --theme-chat-assistant-border: #83c092;
+  --theme-chat-assistant-text: #d3c6aa;
+}
+
+[data-theme="everforest-light"] {
+  color-scheme: light;
+  --theme-abyss: #fdf6e3;
+  --theme-abyss-light: #f1ecd5;
+  --theme-amber: #8da101;
+  --theme-amber-dim: #93b259;
+  --theme-amber-glow: rgba(141, 161, 1, 0.14);
+  --theme-pure-blue: #3a94c5;
+  --theme-pure-blue-dim: #708089;
+  --theme-alabaster: #5c6a72;
+  --theme-paper: #fffbef;
+  --theme-dim-gray: #5f6c62;
+  --theme-mid-gray: #c0c5ad;
+  --theme-danger: #f85552;
+  --theme-success: #8da101;
+  --theme-warning: #dfa000;
+  --theme-accent-contrast: #fffbef;
+  --theme-veil: #5c6a72;
+  --theme-focus: #5c6a72;
+  --theme-scrollbar-thumb: #8da101;
+  --theme-scrollbar-track: #e6e0c7;
+  --theme-selection-bg: #eaedc8;
+  --theme-selection-fg: #5c6a72;
+  --theme-panel-flash: #dcd6bd;
+  --theme-input-placeholder: #7e8b80;
+  --theme-code-bg: #e6e0c7;
+  --theme-blockquote-border: #93b259;
+  --theme-blockquote-text: #708089;
+  --theme-frosted: rgba(253, 246, 227, 0.82);
+  --theme-chat-user-bg: #dbd6b6;
+  --theme-chat-user-border: #b2b295;
+  --theme-chat-tool-bg: #e6e0c7;
+  --theme-chat-tool-border: #c0c5ad;
+  --theme-chat-assistant-bg: #e9f0e9;
+  --theme-chat-assistant-border: #35a77c;
+  --theme-chat-assistant-text: #5c6a72;
+}
+
+[data-theme="periwinkle-owl"] {
+  color-scheme: light;
+  --theme-abyss: #e8ebf8;
+  --theme-abyss-light: #dbdff0;
+  --theme-amber: #9f9adb;
+  --theme-amber-dim: #8798c9;
+  --theme-amber-glow: rgba(159, 154, 219, 0.2);
+  --theme-pure-blue: #5567a0;
+  --theme-pure-blue-dim: #4a5c94;
+  --theme-alabaster: #2f3554;
+  --theme-paper: #f7f7ff;
+  --theme-dim-gray: #575d80;
+  --theme-mid-gray: #aeb8d6;
+  --theme-danger: #c94f5a;
+  --theme-success: #5a9e7a;
+  --theme-warning: #c49030;
+  --theme-accent-contrast: #2f3554;
+  --theme-veil: #2f3554;
+  --theme-focus: #2f3554;
+  --theme-scrollbar-thumb: #8798c9;
+  --theme-scrollbar-track: #dfe3f2;
+  --theme-selection-bg: #d9dbf6;
+  --theme-selection-fg: #2f3554;
+  --theme-panel-flash: #c2cae4;
+  --theme-input-placeholder: #6b7297;
+  --theme-code-bg: #cfd5ea;
+  --theme-blockquote-border: #9f9adb;
+  --theme-blockquote-text: #4a5180;
+  --theme-frosted: rgba(247, 247, 255, 0.86);
+  --theme-chat-user-bg: #c3cbe6;
+  --theme-chat-user-border: #9ea7c9;
+  --theme-chat-tool-bg: #d2d8ec;
+  --theme-chat-tool-border: #aeb8d6;
+  --theme-chat-assistant-bg: #eceafb;
+  --theme-chat-assistant-border: #9f9adb;
+  --theme-chat-assistant-text: #2f3554;
+}
+
+[data-theme="periwinkle-owl-dark"] {
+  color-scheme: dark;
+  --theme-abyss: #283045;
+  --theme-abyss-light: #313a52;
+  --theme-amber: #92a3d3;
+  --theme-amber-dim: #6f7fb0;
+  --theme-amber-glow: rgba(135, 152, 201, 0.18);
+  --theme-pure-blue: #9f9adb;
+  --theme-pure-blue-dim: #8482c4;
+  --theme-alabaster: #dce1f2;
+  --theme-paper: #dce1f2;
+  --theme-dim-gray: #9ba6c0;
+  --theme-mid-gray: #505a76;
+  --theme-danger: #e06070;
+  --theme-success: #6aba8a;
+  --theme-warning: #d4a040;
+  --theme-accent-contrast: #283045;
+  --theme-veil: #1e2434;
+  --theme-focus: #dce1f2;
+  --theme-scrollbar-thumb: #8798c9;
+  --theme-scrollbar-track: #1e2434;
+  --theme-selection-bg: #404d6b;
+  --theme-selection-fg: #dce1f2;
+  --theme-panel-flash: #38415a;
+  --theme-input-placeholder: #7b86a4;
+  --theme-code-bg: #232a3b;
+  --theme-blockquote-border: #9f9adb;
+  --theme-blockquote-text: #c4c0ec;
+  --theme-frosted: rgba(40, 48, 69, 0.78);
+  --theme-chat-user-bg: #434e6b;
+  --theme-chat-user-border: #606a88;
+  --theme-chat-tool-bg: #374058;
+  --theme-chat-tool-border: #505a76;
+  --theme-chat-assistant-bg: rgba(146, 163, 211, 0.34);
+  --theme-chat-assistant-border: #92a3d3;
+  --theme-chat-assistant-text: #dce1f2;
+}
+
+[data-theme="astral-rose"] {
+  color-scheme: dark;
+  --theme-abyss: #0c080f;
+  --theme-abyss-light: #1d1224;
+  --theme-amber: #e8579a;
+  --theme-amber-dim: #c23e8a;
+  --theme-amber-glow: rgba(232, 87, 154, 0.2);
+  --theme-pure-blue: #a07ac8;
+  --theme-pure-blue-dim: #6c3a9a;
+  --theme-alabaster: #f5e8f2;
+  --theme-paper: #f5e8f2;
+  --theme-dim-gray: #c4a0ba;
+  --theme-mid-gray: #4a2c40;
+  --theme-danger: #ef4444;
+  --theme-success: #4ade80;
+  --theme-warning: #facc15;
+  --theme-accent-contrast: #0c080f;
+  --theme-veil: #1f1228;
+  --theme-focus: #f5e8f2;
+  --theme-scrollbar-thumb: #e8579a;
+  --theme-scrollbar-track: #0c080f;
+  --theme-selection-bg: #e8579a;
+  --theme-selection-fg: #0c080f;
+  --theme-panel-flash: #32203f;
+  --theme-input-placeholder: #8a6878;
+  --theme-code-bg: #281a35;
+  --theme-blockquote-border: #c23e8a;
+  --theme-blockquote-text: #c4a0ba;
+  --theme-frosted: rgba(12, 8, 15, 0.78);
+  --theme-chat-user-bg: #36223c;
+  --theme-chat-user-border: #523659;
+  --theme-chat-tool-bg: #251731;
+  --theme-chat-tool-border: #4a2c40;
+  --theme-chat-assistant-bg: rgba(232, 87, 154, 0.24);
+  --theme-chat-assistant-border: #e8579a;
+  --theme-chat-assistant-text: #f5e8f2;
+}
+
+[data-theme="astral-rose-light"] {
+  color-scheme: light;
+  --theme-abyss: #fdf2f7;
+  --theme-abyss-light: #f6e5ed;
+  --theme-amber: #c23e8a;
+  --theme-amber-dim: #a03270;
+  --theme-amber-glow: rgba(194, 62, 138, 0.12);
+  --theme-pure-blue: #7b4faf;
+  --theme-pure-blue-dim: #6c3a9a;
+  --theme-alabaster: #1f1228;
+  --theme-paper: #fffafc;
+  --theme-dim-gray: #7d5c6b;
+  --theme-mid-gray: #d5b6c6;
+  --theme-danger: #c4405a;
+  --theme-success: #3a8a5c;
+  --theme-warning: #a06020;
+  --theme-accent-contrast: #fdf2f7;
+  --theme-veil: #2b1836;
+  --theme-focus: #1f1228;
+  --theme-scrollbar-thumb: #c23e8a;
+  --theme-scrollbar-track: #f6e5ed;
+  --theme-selection-bg: #e8579a;
+  --theme-selection-fg: #ffffff;
+  --theme-panel-flash: #e5ccda;
+  --theme-input-placeholder: #8a6878;
+  --theme-code-bg: #eed9e4;
+  --theme-blockquote-border: #e8579a;
+  --theme-blockquote-text: #5c2e60;
+  --theme-frosted: rgba(253, 242, 247, 0.86);
+  --theme-chat-user-bg: #e7cfdd;
+  --theme-chat-user-border: #c0a2b3;
+  --theme-chat-tool-bg: #eed9e4;
+  --theme-chat-tool-border: #d9bccb;
+  --theme-chat-assistant-bg: #f0dce8;
+  --theme-chat-assistant-border: #c23e8a;
+  --theme-chat-assistant-text: #1f1228;
+}

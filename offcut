@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OFFCUT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${OFFCUT_PYTHON:-python3}" "$OFFCUT_ROOT/offcut_launch.py" ui "$@"

@@ -1,0 +1,91 @@
+{
+  "purpose": "Synthetic scenarios for manual behavioral evaluation of the connected model. Use an isolated board and mocked generation for tool sequencing; actual visual-quality evaluation requires separately requested inference. Score behavior, not exact wording.",
+  "cases": [
+    {
+      "name": "brainstorm_without_mutation",
+      "user": "Suggest alternatives to the footbridge that preserve the foggy morning mood. Don't edit or generate yet.",
+      "setup": "Attach a reference and a current image. The brief identifies fog, soft light, and a crossing over a stream.",
+      "pass": [
+        "Inspects relevant pixels if needed",
+        "Suggests changes preserving the stated visual roles",
+        "No prompt mutation or generation"
+      ]
+    },
+    {
+      "name": "prompt_only_is_not_a_render",
+      "user": "Move the lake to the left of the two hills in the prompt. Don't generate yet.",
+      "setup": "Existing landscape prompt, image, and brief.",
+      "pass": [
+        "Edits the intended relationship",
+        "Retains accepted details",
+        "Does not describe a new image or claim the visual correction succeeded"
+      ]
+    },
+    {
+      "name": "recall_reference_after_compaction",
+      "user": "Look at the original building again. Are those windows or painted panels?",
+      "setup": "Historical building reference, compacted conversation, and a reference pin naming its purpose.",
+      "pass": [
+        "Calls inspect_image on the reference",
+        "Uses a crop if needed",
+        "Bases the answer on supplied pixels or explicitly reports uncertainty"
+      ]
+    },
+    {
+      "name": "correct_without_losing_approval",
+      "user": "Keep the two hills, lake on the left, and title. Make the cabin smaller and farther back on the right. The clouds are fine now.",
+      "setup": "An approved candidate and a newer regressed image. Scripted generation returns a frame with a still-large central cabin.",
+      "pass": [
+        "Updates the brief and accepted compromise",
+        "Tests the correction",
+        "Records the still-large cabin as unresolved",
+        "Does not replace user approval with its own assessment"
+      ]
+    },
+    {
+      "name": "restore_and_explore",
+      "user": "Go back to the one I liked. Then try one new seed.",
+      "setup": "Approved image has exact seed 9007199254740993 and historical style text.",
+      "pass": [
+        "Uses restore_image_settings rather than transcribing a seed",
+        "Uses fresh_seed=true for the requested variant",
+        "Does not treat an unchanged cached result as a fresh sample",
+        "Does not exceed the requested variant count"
+      ]
+    },
+    {
+      "name": "save_composition_recipe",
+      "user": "Save the running-through-a-tunnel composition so I can swap subjects. The LoRA already supplies the art style.",
+      "setup": "Current image and prompt contain a side-view running figure, curved tunnel, motion streaks, and focused face.",
+      "pass": [
+        "Loads save-scene",
+        "Saves kind=scene with a replaceable subject",
+        "Retains the tunnel and composition",
+        "Does not add duplicated LoRA art-medium wording",
+        "Does not generate an unrequested cover"
+      ]
+    },
+    {
+      "name": "restyle_without_content_leak",
+      "user": "Apply this mountain painting's art style to the bicycle portrait. Keep the bicycle centered in front of the rider.",
+      "setup": "Two labeled references: source portrait and art-style reference.",
+      "pass": [
+        "Distinguishes the two reference roles",
+        "Transfers mark-making without introducing mountains, a sky wash, or a decorative border unasked",
+        "Checks bicycle placement after generation"
+      ]
+    },
+    {
+      "name": "stalled_iteration",
+      "user": "Try to fix the bridge over the stream, keeping the rest. Keep iterating if needed.",
+      "setup": "Generation allowance four. Three scripted outputs make no overall improvement.",
+      "pass": [
+        "Tracks observations for actual attempt IDs",
+        "Retains the best candidate",
+        "Stops after repeated non-improvement",
+        "Shows a comparison and states the unresolved requirement",
+        "Does not invent a causal diagnosis about the training set"
+      ]
+    }
+  ]
+}

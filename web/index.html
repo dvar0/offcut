@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en" data-theme="periwinkle-owl-dark" data-scheme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#283045">
+  <meta name="description" content="Offcut — a local creative workspace for generative tools">
+  <title>Offcut</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/themes.js"></script>
+  <link rel="stylesheet" href="/themes.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/create" data-route="create" aria-label="Offcut Create">
+      <span class="brand-mark" aria-hidden="true">OC</span>
+      <span><b>OFFCUT</b><small>CREATIVE WORKSPACE</small></span>
+    </a>
+    <nav class="primary-nav" aria-label="Primary navigation">
+      <a href="/create" data-route="create">CREATE</a>
+      <a href="/gallery" data-route="gallery">GALLERY</a>
+      <a href="/styles" data-route="styles">STYLES</a>
+      <a href="/boards" data-route="boards">BOARDS</a>
+      <a href="/settings" data-route="settings">SETTINGS</a>
+    </nav>
+    <div class="runtime-pill" id="runtimePill">
+      <i></i><span id="runtimeText">CHECKING RUNTIME</span>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <section class="page create-page" id="createPage" data-page="create">
+      <div class="create-grid">
+        <aside class="control-panel">
+          <form id="generateForm">
+            <div class="panel-section prompt-section">
+              <div class="section-heading"><span>01</span><h2>DIRECTION</h2></div>
+              <label class="field-label" for="prompt">PROMPT</label>
+               <div class="prompt-wrap" id="promptWrap">
+                 <div class="prompt-highlight" id="promptHighlight" aria-hidden="true"></div>
+                 <textarea id="prompt" rows="6" required placeholder="Describe the frame, material, light, gesture..."></textarea>
+                 <span id="characterCount">0 / 20K</span>
+               </div>
+               <div class="prompt-sync-diff" id="promptSyncDiff" hidden></div>
+              <div class="enhancement-block">
+                <label class="toggle-row" for="enhance">
+                  <span><b>PROMPT ENHANCEMENT</b></span>
+                  <input id="enhance" type="checkbox">
+                  <i></i>
+                </label>
+                <div class="enhancer-controls" id="enhancerControls" hidden>
+                  <label><span class="field-label">CONNECTION</span><select id="enhancerConnection"></select></label>
+                  <label><span class="field-label">MODEL</span><select id="enhancerModel"></select></label>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-section">
+              <div class="section-heading compact"><span>02</span><h2>MODEL ROUTE</h2></div>
+              <div class="route-switch" id="routeSwitch">
+                <label><input type="radio" name="preset" value="turbo-int8" checked><span>TURBO<small>DIRECT</small></span></label>
+                <label><input type="radio" name="preset" value="raw-int8-turbo-lora"><span>RAW + T<small>LORA</small></span></label>
+                <label><input type="radio" name="preset" value="raw-int8"><span>RAW<small>FULL</small></span></label>
+              </div>
+            </div>
+
+            <div class="panel-section frame-section">
+              <div class="section-heading compact"><span>03</span><h2>FRAME</h2></div>
+              <div class="ratio-grid" id="ratioGrid">
+                <button type="button" data-width="1024" data-height="1024" class="active"><i class="ratio-square"></i><span>1:1</span></button>
+                <button type="button" data-width="1216" data-height="832"><i class="ratio-landscape"></i><span>3:2</span></button>
+                <button type="button" data-width="1344" data-height="768"><i class="ratio-wide"></i><span>16:9</span></button>
+                <button type="button" data-width="768" data-height="1344"><i class="ratio-portrait"></i><span>9:16</span></button>
+              </div>
+              <div class="megapixel-grid" id="megapixelGrid">
+                <button type="button" data-megapixels="0.5">0.5 MP</button>
+                <button type="button" data-megapixels="1" class="active">1 MP</button>
+                <button type="button" data-megapixels="2">2 MP</button>
+              </div>
+              <div class="dimension-grid">
+                <label><span>WIDTH</span><input id="width" type="number" min="256" max="2048" step="16" value="1024"></label>
+                <button class="ratio-lock active" id="ratioLock" type="button" aria-label="Unlock aspect ratio" aria-pressed="true" title="Unlock aspect ratio">x</button>
+                <label><span>HEIGHT</span><input id="height" type="number" min="256" max="2048" step="16" value="1024"></label>
+              </div>
+              <p class="frame-readout" id="frameReadout"></p>
+            </div>
+
+            <div class="panel-section style-section">
+              <div class="section-heading compact"><span>04</span><h2>STYLE</h2><em id="styleCount">0 ACTIVE</em></div>
+              <div class="active-library" id="activeLibrary"></div>
+              <button class="library-browse" id="browseLibrary" type="button">+ BROWSE STYLES</button>
+            </div>
+
+            <details class="advanced panel-section">
+              <summary><span>ADVANCED CONTROLS</span><i>+</i></summary>
+              <div class="advanced-grid">
+                <label><span>SEED</span><span class="input-action"><input id="seed" inputmode="numeric" placeholder="RANDOM"><button id="randomSeed" type="button">RND</button></span></label>
+                <label><span>STEPS</span><input id="steps" type="number" min="1" max="100" placeholder="AUTO"></label>
+                <label><span>GUIDANCE</span><input id="guidance" type="number" min="0" max="20" step="0.1" placeholder="AUTO"></label>
+              </div>
+              <label class="negative-field"><span>NEGATIVE PROMPT</span><textarea id="negativePrompt" rows="2" placeholder="Raw route only"></textarea></label>
+            </details>
+
+            <div class="form-footer">
+              <div class="batch-row">
+                <span>BATCH</span>
+                <div class="batch-options" id="batchOptions" role="group" aria-label="How many frames one press generates">
+                  <button type="button" data-count="1" class="active">1</button>
+                  <button type="button" data-count="2">2</button>
+                  <button type="button" data-count="4">4</button>
+                  <button type="button" data-count="8">8</button>
+                </div>
+                <em id="batchHint">ONE FRAME</em>
+              </div>
+              <div class="generate-row">
+                <button class="generate-button" id="generateButton" type="submit">
+                  <span><i></i><b id="generateLabel">GENERATE</b></span><kbd>CTRL ENTER</kbd>
+                </button>
+                <button class="stop-button" id="stopButton" type="button" title="Stop generating" aria-label="Stop generating" hidden><i></i></button>
+              </div>
+              <div class="generation-progress" id="generationProgress" hidden>
+                <div><span id="progressStage">PREPARING</span><b id="progressPercent">0%</b><small id="progressElapsed">00:00.0</small></div>
+                <div class="progress-track"><i id="progressBar"></i></div>
+                <p id="progressDetail">Validating generation settings</p>
+                <button class="progress-board" id="progressBoard" type="button" hidden></button>
+              </div>
+              <p class="form-error" id="formError" role="alert"></p>
+            </div>
+          </form>
+        </aside>
+
+        <section class="canvas-panel" aria-label="Selected image">
+          <div class="canvas" id="canvas">
+            <div class="canvas-empty" id="canvasEmpty">
+              <span class="empty-glyph" aria-hidden="true">OC</span>
+              <h1>MAKE THE FIRST FRAME</h1>
+              <p>Write a prompt, choose a route, and generate into this board.</p>
+            </div>
+            <img id="selectedImage" alt="Selected generation" role="button" tabindex="0" aria-haspopup="dialog" aria-label="View selected image full screen" title="View full screen" hidden>
+            <button class="canvas-close" id="clearSelectedImage" type="button" aria-label="Close image and clear the workspace selection" title="Close image" hidden>×</button>
+          </div>
+          <div class="frame-dock">
+            <div class="frame-bar" id="frameBar" hidden>
+              <button class="frame-favorite" id="favoriteButton" type="button" aria-pressed="false" title="Favorite this frame"><span>☆</span></button>
+              <p class="frame-prompt" id="framePrompt"></p>
+              <div class="frame-glance" id="frameGlance"></div>
+              <div class="frame-bar-actions">
+                <button id="reusePromptButton" type="button" title="Put only this frame's prompt back in the box">↺ PROMPT</button>
+                <button id="reuseButton" type="button" title="Put every setting from this frame back in the panel">↺ SETTINGS</button>
+                <a id="downloadButton" href="#" download title="Download the full-resolution PNG">↓ PNG</a>
+                <button class="frame-delete" id="deleteFrameButton" type="button" title="Delete this frame" aria-label="Delete this frame"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.9 4.3h10.2M6.3 4.3V2.7h3.4v1.6M4.4 4.3l.6 8.5a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9l.6-8.5M6.7 6.6v4.6M9.3 6.6v4.6"/></svg></button>
+                <button class="frame-details-toggle" id="frameDetailsToggle" type="button" aria-expanded="false" aria-controls="frameDetails">DETAILS<i></i></button>
+              </div>
+            </div>
+            <div class="frame-details" id="frameDetails" hidden>
+              <div class="frame-spec" id="frameSpec"></div>
+              <div class="frame-recipe" id="frameRecipe"></div>
+              <dl class="frame-prompts" id="framePrompts">
+                <dt>RAW</dt><dd id="recordRaw"></dd>
+                <dt id="recordEnhancedLabel">ENHANCED</dt><dd id="recordEnhanced"></dd>
+                <dt>FINAL PROMPT</dt><dd id="recordFinal"></dd>
+              </dl>
+              <div class="frame-controls">
+                <label class="move-control">MOVE TO <select id="moveBoard"></select></label>
+                <label class="move-control cover-control">SET COVER <select id="coverTarget" aria-label="Use this frame as a library cover"></select></label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="board-rail inspector" id="inspector">
+          <div class="inspector-resize" id="inspectorResize" role="separator" tabindex="0" aria-label="Resize inspector" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="640"></div>
+          <div class="inspector-tabs" role="tablist" aria-label="Board inspector">
+            <button id="imagesTab" type="button" role="tab" aria-selected="true" aria-controls="imagesPanel">IMAGES</button>
+            <button id="chatTab" type="button" role="tab" aria-selected="false" aria-controls="chatPanel">CHAT</button>
+          </div>
+          <section class="inspector-panel images-panel" id="imagesPanel" role="tabpanel" aria-labelledby="imagesTab">
+            <div class="rail-header">
+              <select id="activeBoard" aria-label="Active board"></select>
+              <button class="new-board-rail" id="quickBoardButton" type="button" title="New board" aria-label="New board">+</button>
+              <button id="railFavoriteFilter" type="button" title="Show favorites" aria-label="Show favorites">☆</button>
+            </div>
+            <label class="search-field rail-search"><span>⌕</span><input id="railSearch" type="search" placeholder="SEARCH PROMPTS" aria-label="Search board frames by prompt"></label>
+            <p class="rail-hint" id="railHint">DRAG TO REORDER OR DROP INTO CHAT</p>
+            <div class="thumbnail-grid" id="boardThumbnails"></div>
+            <div class="rail-empty" id="railEmpty">NO FRAMES IN THIS BOARD</div>
+          </section>
+          <section class="inspector-panel chat-panel" id="chatPanel" role="tabpanel" aria-labelledby="chatTab" hidden>
+            <div class="chat-list-view" id="chatListView">
+              <div class="chat-list-header"><div><b>BOARD CHATS</b><span id="chatBoardName"></span></div><button id="newChatButton" type="button">NEW CHAT</button></div>
+              <div class="chat-notice" id="chatNotice" role="status" hidden></div>
+              <div class="chat-list" id="chatList"></div>
+              <div class="chat-empty" id="chatEmpty">Start a chat to develop this board with a connected model.</div>
+            </div>
+            <div class="conversation" id="conversation" hidden>
+              <header class="conversation-header">
+                <button class="chat-back" id="conversationBack" type="button" aria-label="Back to chats">←</button>
+                <button class="conversation-title" id="conversationRename" type="button" title="Rename chat"><b id="conversationTitle">CHAT</b><span id="conversationMeta"></span></button>
+                 <button id="chatBrief" type="button" title="Creative brief, reference pins, and generation allowance">BRIEF</button>
+                 <select id="chatModel" aria-label="Chat model"></select>
+                 <select id="chatReasoning" aria-label="Reasoning effort" hidden></select>
+              </header>
+              <div class="message-scroller" id="messageScroller" tabindex="0">
+                <div class="message-list" id="messageList" aria-live="polite"></div>
+                <div class="message-bottom-space" aria-hidden="true"></div>
+              </div>
+              <button class="jump-latest" id="jumpLatest" type="button" hidden>JUMP TO LATEST ↓</button>
+              <form class="chat-composer" id="chatComposer">
+                <div class="composer-progress" id="composerProgress" aria-hidden="true" hidden><i></i></div>
+                <div class="composer-context" id="composerContext"></div>
+                <div class="attachment-tray" id="attachmentTray" hidden></div>
+                <div class="composer-overlay" id="composerOverlay" hidden></div>
+                <textarea id="chatInput" rows="1" maxlength="50000" placeholder="Message this board…" aria-label="Chat message"></textarea>
+                 <div class="composer-actions">
+                   <button class="attach-image" id="attachCurrentImage" type="button">+ CURRENT IMAGE</button>
+                   <button class="attach-image" id="uploadImages" type="button">+ UPLOAD</button>
+                   <button class="attach-image" id="pickFromBoard" type="button">+ FROM BOARD</button>
+                   <input id="imageUploadInput" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+                   <span id="composerStatus"></span>
+                  <button class="stop-chat" id="stopChat" type="button" hidden>STOP</button>
+                  <button class="send-chat" id="sendChat" type="submit" aria-label="Send message">SEND</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page gallery-page" id="galleryPage" data-page="gallery" hidden>
+      <div class="gallery-toolbar">
+        <label class="search-field"><span>⌕</span><input id="gallerySearch" type="search" placeholder="SEARCH RAW, ENHANCED, OR FINAL PROMPTS"></label>
+        <select id="galleryBoard"><option value="">ALL BOARDS</option></select>
+        <button id="galleryFavorites" type="button">☆ FAVORITES</button>
+        <b class="gallery-count" id="galleryCount" aria-label="Matching image count">0</b>
+      </div>
+      <div class="gallery-grid" id="galleryGrid"></div>
+      <div class="page-empty" id="galleryEmpty" hidden>NO FRAMES MATCH THIS FILTER</div>
+    </section>
+
+    <section class="page styles-page" id="stylesPage" data-page="styles" hidden>
+      <div class="boards-toolbar library-toolbar">
+        <div class="library-kinds" id="libraryFilter" role="group" aria-label="Filter the library by kind">
+          <button type="button" data-kind="all" class="active">ALL</button>
+          <button type="button" data-kind="trained">◆ TRAINED</button>
+          <button type="button" data-kind="written">✎ WRITTEN</button>
+        </div>
+        <label class="search-field library-search"><span>⌕</span><input id="librarySearch" type="search" placeholder="SEARCH THE LIBRARY"></label>
+        <button class="accent-button" id="newStyleButton" type="button">+ SAVE A STYLE</button>
+      </div>
+      <div class="cover-bar">
+        <div class="cover-bar-actions">
+          <span class="cover-bar-label">COVERS</span>
+          <button class="outline-button" id="fillCoversButton" type="button" title="Generate a cover for every entry that does not have one">FILL MISSING</button>
+          <button class="outline-button" id="regenerateCoversButton" type="button" title="Rebuild every cover from the current recipe">REGENERATE ALL</button>
+          <a class="cover-bar-recipe" id="coverRecipeLink" href="/settings" data-route="settings" title="The prompt, seed and size every cover is generated from">EDIT RECIPE</a>
+        </div>
+        <div class="generation-progress cover-progress" id="coverProgress" hidden>
+          <div><span id="coverProgressStage">PREPARING</span><b id="coverProgressCount">0 / 0</b><small id="coverProgressElapsed">00:00.0</small></div>
+          <div class="progress-track"><i id="coverProgressBar"></i></div>
+          <p id="coverProgressDetail">Working</p>
+        </div>
+        <p class="cover-run-status" id="coverRunStatus" hidden></p>
+      </div>
+      <details class="lora-install-help">
+        <summary>ADD YOUR OWN LORAS</summary>
+        <p>Put Krea 2 compatible <code>.safetensors</code> files directly in one of these folders, then refresh the library. Filenames do not need a prefix. Use folders containing only Krea 2 LoRAs; adapters for other models are not compatible.</p>
+        <ul id="loraDirectories"></ul>
+        <p>Open a LoRA’s EDIT panel to set its trigger phrase, default strength, summary, and prompting guidance. Check the model author’s instructions. Trigger, summary, and guidance start empty. To use another folder, configure <code>lora_dirs</code> with the CLI.</p>
+        <button type="button" class="outline-button" id="refreshLoras">REFRESH LIBRARY</button>
+      </details>
+      <div class="styles-grid" id="stylesGrid"></div>
+      <div class="page-empty" id="stylesEmpty" hidden>NOTHING IN THE LIBRARY YET</div>
+    </section>
+
+    <section class="page boards-page" id="boardsPage" data-page="boards" hidden>
+      <div class="boards-toolbar">
+        <button class="accent-button" id="newBoardButton" type="button">+ CREATE BOARD</button>
+      </div>
+      <div class="boards-grid" id="boardsGrid"></div>
+    </section>
+
+    <section class="page settings-page" id="settingsPage" data-page="settings" hidden>
+      <div class="settings-stack">
+        <details class="settings-panel" id="appearancePanel">
+          <summary>
+            <span class="settings-summary-copy"><span>APPEARANCE</span><b id="appearanceHeading">THEME</b></span>
+            <span class="settings-summary-meta" id="appearanceSummary"></span>
+            <i aria-hidden="true">+</i>
+          </summary>
+          <div class="settings-panel-body appearance-panel">
+            <div class="section-heading compact"><span>01</span><h2>MODE</h2></div>
+            <div class="route-switch appearance-mode" id="appearanceMode">
+              <label><input type="radio" name="appearanceMode" value="system" checked><span>FOLLOW SYSTEM<small>DARK + LIGHT</small></span></label>
+              <label><input type="radio" name="appearanceMode" value="manual"><span>MANUAL<small>LOCK ONE</small></span></label>
+            </div>
+            <p class="appearance-status" id="appearanceStatus"></p>
+            <div class="section-heading compact theme-families-heading"><span>02</span><h2>FAMILIES</h2></div>
+            <div id="themeFamilies"></div>
+          </div>
+        </details>
+        <details class="settings-panel" id="connectionsPanel">
+          <summary>
+            <span class="settings-summary-copy"><span>CONNECTIONS</span><b>BACKEND PROFILES</b></span>
+            <span class="settings-summary-meta" id="connectionsSummary"></span>
+            <i aria-hidden="true">+</i>
+          </summary>
+          <div class="settings-panel-body">
+            <div class="connections-layout">
+              <div class="connection-list" id="connectionList"></div>
+              <form class="connection-editor" id="connectionForm">
+                <input id="connectionId" type="hidden">
+                <div class="editor-heading"><span id="connectionFormMode">NEW CONNECTION</span><b>BACKEND PROFILE</b></div>
+                <label><span>DISPLAY NAME</span><input id="connectionName" required maxlength="100" autocomplete="off" placeholder="LOCAL OLLAMA"></label>
+                <label><span>BASE URL</span><input id="connectionUrl" type="url" required placeholder="http://127.0.0.1:11434/v1"></label>
+                <label><span>API PROTOCOL</span>
+                  <select id="connectionProtocol">
+                    <option value="chat">OPENAI CHAT COMPLETIONS</option>
+                    <option value="responses">OPENAI RESPONSES</option>
+                    <option value="anthropic">ANTHROPIC MESSAGES</option>
+                    <option value="opencode-go">OPENCODE GO / AUTO BY MODEL</option>
+                  </select>
+                </label>
+                <label><span>API KEY <i id="connectionKeyStatus">NOT STORED</i></span><input id="connectionKey" type="password" autocomplete="new-password" placeholder="LEAVE BLANK TO KEEP EXISTING"></label>
+                <label><span>DEFAULT MODEL</span><select id="connectionDefaultModel"></select></label>
+                <label id="connectionDefaultReasoningWrap" hidden><span>DEFAULT REASONING</span><select id="connectionDefaultReasoning"></select></label>
+                <div class="editor-actions">
+                  <button class="accent-button" type="submit">SAVE PROFILE</button>
+                  <button class="outline-button" id="clearConnectionForm" type="button">CLEAR</button>
+                </div>
+                <p class="editor-note">Keys use your desktop secret service when available and otherwise remain in server memory for this session. They are never written to SQLite or PNG metadata.</p>
+                <p class="form-error" id="connectionError"></p>
+              </form>
+            </div>
+          </div>
+        </details>
+        <details class="settings-panel" id="coverPanel">
+          <summary>
+            <span class="settings-summary-copy"><span>LIBRARY</span><b>COVER RECIPE</b></span>
+            <span class="settings-summary-meta" id="coverSummary"></span>
+            <i aria-hidden="true">+</i>
+          </summary>
+          <div class="settings-panel-body">
+            <form class="cover-recipe" id="coverRecipeForm">
+              <label><span>COVER PROMPT</span><textarea id="coverPrompt" rows="8" required maxlength="20000"></textarea></label>
+              <div class="cover-recipe-grid">
+                <label><span>SEED</span><input id="coverSeed" required autocomplete="off" inputmode="numeric"></label>
+                <label><span>ROUTE</span>
+                  <select id="coverPreset">
+                    <option value="turbo-int8">TURBO INT8</option>
+                    <option value="raw-int8-turbo-lora">RAW + TURBO LORA</option>
+                    <option value="raw-int8">RAW INT8</option>
+                  </select>
+                </label>
+                <label><span>WIDTH</span><input id="coverWidth" type="number" min="256" max="2048" step="16" required></label>
+                <label><span>HEIGHT</span><input id="coverHeight" type="number" min="256" max="2048" step="16" required></label>
+                <label><span>STEPS</span><input id="coverSteps" type="number" min="1" max="100" required></label>
+                <label id="coverGuidanceField"><span>GUIDANCE</span><input id="coverGuidance" type="number" min="0" max="20" step="0.1" required></label>
+                <label><span>LORA STRENGTH</span><input id="coverLoraStrength" type="number" min="-100" max="100" step="0.05" required title="Deliberately higher than you would generate at. A cover is meant to make the adapter's hand obvious, and nothing else reads this value."></label>
+              </div>
+              <div class="editor-actions">
+                <button class="accent-button" type="submit">SAVE RECIPE</button>
+                <button class="outline-button" id="coverRestorePrompt" type="button">RESTORE DEFAULT PROMPT</button>
+              </div>
+              <p class="form-error" id="coverRecipeError"></p>
+              <p class="form-note" id="coverRecipeStatus"></p>
+            </form>
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="boardDialog">
+    <form class="dialog-card" id="boardForm">
+      <div class="dialog-heading"><div><span>BOARD SETUP</span><h2>NEW VISUAL THREAD</h2></div><button id="closeBoardDialog" type="button">×</button></div>
+      <label><span>BOARD NAME</span><input id="boardName" required maxlength="100" placeholder="APP LOGO EXPLORATION"></label>
+      <label><span>DESCRIPTION</span><textarea id="boardDescription" rows="3" maxlength="500" placeholder="WHAT ARE YOU TRYING TO SOLVE?"></textarea></label>
+      <button class="accent-button" type="submit">CREATE AND OPEN</button>
+      <p class="form-error" id="boardError"></p>
+    </form>
+  </dialog>
+
+  <dialog id="styleDialog">
+    <form class="dialog-card" id="styleForm">
+      <div class="dialog-heading"><div><span id="styleDialogEyebrow">STYLE LIBRARY</span><h2 id="styleDialogTitle">SAVE A STYLE</h2></div><button id="closeStyleDialog" type="button">×</button></div>
+      <div class="cover-field">
+        <div class="cover-preview" id="styleReference">
+          <img id="styleReferenceImage" alt="" hidden>
+          <span id="styleReferenceEmpty">NO COVER</span>
+        </div>
+        <div class="cover-field-copy">
+          <span>COVER FRAME</span>
+          <p>Pick a frame that shows what this style does. It is what you will recognise it by in the picker.</p>
+          <div class="cover-field-actions">
+            <button type="button" id="styleReferencePick">CHOOSE FRAME</button>
+            <button type="button" id="styleReferenceClear">CLEAR</button>
+          </div>
+        </div>
+      </div>
+      <label><span>NAME</span><input id="styleName" required maxlength="80" placeholder="DECO TRAVEL POSTER"></label>
+      <label><span>DESCRIPTION</span><input id="styleDescription" maxlength="500" placeholder="WHEN TO REACH FOR THIS STYLE"></label>
+      <label><span>KIND</span><select id="styleKind"><option value="art">ART STYLE</option><option value="scene">SCENE RECIPE</option></select></label>
+      <label><span>REUSABLE TEXT</span><textarea id="styleText" rows="5" required maxlength="2000" placeholder="Medium, technique, texture, palette, and light — never the subject"></textarea></label>
+      <p class="style-guidance" id="styleGuidance"></p>
+      <button class="accent-button" type="submit">SAVE STYLE</button>
+      <p class="form-error" id="styleError"></p>
+    </form>
+  </dialog>
+
+  <dialog id="briefDialog">
+    <form class="dialog-card" id="briefForm">
+      <div class="dialog-heading"><h2>CREATIVE BRIEF</h2><button id="closeBrief" type="button" aria-label="Close brief">×</button></div>
+      <p class="style-guidance">Keep what matters across revisions. You and the agent can update these notes.</p>
+      <label><span>GOAL</span><textarea id="briefGoal" rows="2" maxlength="2000"></textarea></label>
+      <label><span>KEEP · ONE DETAIL PER LINE</span><textarea id="briefKeep" rows="3"></textarea></label>
+      <label><span>ACCEPTED COMPROMISES · ONE PER LINE</span><textarea id="briefTradeoffs" rows="2"></textarea></label>
+      <label><span>NEXT CHANGE</span><textarea id="briefNext" rows="2" maxlength="2000"></textarea></label>
+      <label><span>APPROACHES THAT DIDN'T WORK · ONE PER LINE</span><textarea id="briefFailed" rows="2"></textarea></label>
+      <label><span>YOUR APPROVED FRAME</span><select id="briefApproved"></select></label>
+      <label><span>BEST CANDIDATE</span><select id="briefBest"></select></label>
+      <div class="brief-pins"><span>REFERENCE PINS</span><div id="briefReferences"></div><button id="briefAddReference" type="button">+ REFERENCE</button></div>
+      <label><span>MAXIMUM GENERATIONS PER REPLY</span><input id="briefLimit" type="number" min="1" max="50" required value="4"></label>
+      <p class="style-guidance">A ceiling for requested iteration, not a target. Discussion and prompt-only edits do not generate images. STOP ends the current reply.</p>
+      <div id="briefAttempts"></div>
+      <button class="accent-button" type="submit">SAVE BRIEF</button>
+      <p class="form-error" id="briefError"></p>
+    </form>
+  </dialog>
+
+  <dialog id="loraDialog">
+    <form class="dialog-card" id="loraForm">
+      <div class="dialog-heading"><div><span>◆ TRAINED</span><h2 id="loraDialogTitle">LORA</h2></div><button id="closeLoraDialog" type="button">×</button></div>
+      <div class="cover-field">
+        <div class="cover-preview" id="loraCover">
+          <img id="loraCoverImage" alt="" hidden>
+          <span id="loraCoverEmpty">NO COVER</span>
+        </div>
+        <div class="cover-field-copy">
+          <span>COVER FRAME</span>
+          <p>Pick a frame you generated with this LoRA. It is what you will recognise it by in the picker.</p>
+          <div class="cover-field-actions">
+            <button type="button" id="loraCoverPick">CHOOSE FRAME</button>
+            <button type="button" id="loraCoverClear">CLEAR</button>
+          </div>
+        </div>
+      </div>
+      <label><span>DISPLAY NAME</span><input id="loraDisplayName" maxlength="80" autocomplete="off" placeholder="LEAVE BLANK TO USE THE FILE NAME"></label>
+      <label><span>DEFAULT STRENGTH</span><input id="loraDefaultStrength" type="number" min="-100" max="100" step="0.05" title="Around 1.0 is normal; most LoRAs degrade well before 2.0. The range is wide on purpose, for experimenting."></label>
+      <label><span>TRIGGER PHRASE</span><input id="loraTrigger" maxlength="2000" autocomplete="off" placeholder="Exact words recommended by the LoRA author"></label>
+      <p class="lora-field-help">Added automatically while this LoRA is active. Leave blank if it does not need a trigger.</p>
+      <label><span>SUMMARY</span><input id="loraSummary" maxlength="300" placeholder="A short description for the library and assistant"></label>
+      <label><span>PROMPTING GUIDANCE</span><textarea id="loraPromptingNotes" rows="6" maxlength="12000" placeholder="Useful strengths, caption patterns, example prompts, and limitations"></textarea></label>
+      <p class="lora-field-help">Shared with the assistant when it inspects this LoRA and with prompt enhancement while the LoRA is active. Suggestions only; they do not change the prompt on their own.</p>
+      <label><span>LIBRARY NOTES</span><textarea id="loraNotes" rows="2" maxlength="2000" placeholder="Your own notes for browsing the library"></textarea></label>
+      <div class="lora-facts" id="loraFacts"></div>
+      <button class="accent-button" type="submit">SAVE</button>
+      <p class="form-error" id="loraError"></p>
+    </form>
+  </dialog>
+
+  <dialog id="libraryPickerDialog" class="library-picker">
+    <div class="library-picker-shell">
+      <div class="dialog-heading">
+        <div><span>LIBRARY</span><h2>CHOOSE A STYLE</h2></div>
+        <button id="closeLibraryPicker" type="button">×</button>
+      </div>
+      <div class="library-filter">
+        <div class="library-kinds" id="pickerFilter" role="group" aria-label="Filter the library by kind">
+          <button type="button" data-kind="all" class="active">ALL</button>
+          <button type="button" data-kind="trained">◆ TRAINED</button>
+          <button type="button" data-kind="written">✎ WRITTEN</button>
+        </div>
+        <label class="search-field"><span>⌕</span><input id="pickerSearch" type="search" placeholder="SEARCH THE LIBRARY"></label>
+      </div>
+      <div class="library-picker-grid" id="pickerGrid"></div>
+      <div class="library-picker-foot">
+        <span id="pickerCount"></span>
+        <button type="button" id="pickerManage">MANAGE LIBRARY</button>
+        <button class="accent-button" type="button" id="pickerDone">DONE</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="coverPickerDialog" class="cover-picker">
+    <div class="cover-picker-shell">
+      <div class="dialog-heading">
+        <div><span id="coverPickerEyebrow">COVER FRAME</span><h2>CHOOSE A FRAME</h2></div>
+        <button id="closeCoverPicker" type="button">×</button>
+      </div>
+      <div class="cover-picker-head"><select id="coverPickerBoard" aria-label="Board to pick a frame from"></select></div>
+      <div class="cover-picker-grid" id="coverPickerGrid"></div>
+    </div>
+  </dialog>
+
+  <dialog id="galleryDetailDialog" class="detail-dialog">
+    <div class="detail-shell">
+      <button class="dialog-close" id="closeDetailDialog" type="button">×</button>
+      <img id="detailImage" alt="Gallery image detail">
+      <div class="detail-copy">
+        <span class="eyebrow" id="detailBoard">BOARD</span>
+        <h2 id="detailPrompt">PROMPT</h2>
+        <div class="detail-actions">
+          <button id="detailFavorite" type="button">☆ FAVORITE</button>
+          <button id="detailReusePrompt" type="button">↺ PROMPT ONLY</button>
+          <button id="detailReuse" type="button">↺ OPEN &amp; REUSE</button>
+          <button id="detailSaveStyle" type="button">✦ SAVE AS STYLE</button>
+          <label class="detail-cover">SET COVER <select id="detailCoverTarget" aria-label="Use this frame as a library cover"></select></label>
+          <a id="detailDownload" href="#" download>DOWNLOAD</a>
+          <button class="detail-delete" id="detailDelete" type="button">DELETE</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="imageViewerDialog" class="image-viewer" aria-label="Full-screen image viewer">
+    <button class="image-viewer-close" id="closeImageViewer" type="button" aria-label="Close full-screen image viewer">×</button>
+    <img id="imageViewerImage" alt="">
+  </dialog>
+
+  <template id="boardCardTemplate">
+    <article class="board-card">
+      <button class="board-cover" type="button"><span>EMPTY BOARD</span></button>
+      <div class="board-card-copy"><span class="board-number"></span><h2></h2><p></p><div><b class="board-frame-count"></b><b class="board-favorite-count"></b></div></div>
+      <div class="board-card-actions"><button class="open-board" type="button">OPEN BOARD</button><button class="rename-board" type="button">RENAME</button><button class="delete-board" type="button">DELETE</button></div>
+    </article>
+  </template>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
