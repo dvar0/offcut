@@ -19,6 +19,7 @@ import os
 import queue
 import re
 import secrets
+import socket
 import subprocess
 import threading
 import time
@@ -3281,6 +3282,16 @@ def relay_chat_stream(handler: "RequestHandler", run: ActiveChatRun) -> None:
         run.unsubscribe(subscriber)
 
 
+class OffcutHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]):
+        host, _ = address
+        self.address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        super().__init__(address, handler)
+        self.allowed_hosts = LOOPBACK_HOSTS | {host.lower(), self.server_name.lower()}
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "Offcut/1.0"
 
@@ -3665,17 +3676,29 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def validate_local_request(self) -> bool:
         host_header = self.headers.get("Host", "")
+        # A wildcard listener accepts the interface IP used by this connection, rather than
+        # arbitrary Host names. Explicit bind names and the machine name also work on the LAN.
+        allowed_hosts = getattr(self.server, "allowed_hosts", LOOPBACK_HOSTS) | {self.connection.getsockname()[0]}
         try:
-            hostname = urlparse(f"//{host_header}").hostname
+            host = urlparse(f"//{host_header}")
+            host_valid = host.hostname in allowed_hosts and not (
+                host.username is not None or host.password is not None or host.path or host.query or host.fragment
+            )
+            # Accessing port validates malformed and out-of-range values, even when omitted.
+            host.port
+            origin = self.headers.get("Origin")
+            origin_valid = True
+            if origin:
+                parsed_origin = urlparse(origin)
+                origin_valid = (
+                    parsed_origin.scheme == "http"
+                    and parsed_origin.netloc.lower() == host_header.lower()
+                    and not (parsed_origin.path or parsed_origin.params or parsed_origin.query or parsed_origin.fragment)
+                )
         except ValueError:
-            hostname = None
-        origin = self.headers.get("Origin")
-        origin_valid = True
-        if origin:
-            parsed_origin = urlparse(origin)
-            origin_valid = parsed_origin.scheme in ("http", "https") and parsed_origin.netloc.lower() == host_header.lower()
-        if hostname not in LOOPBACK_HOSTS or not origin_valid:
-            self.send_json({"error": "Only same-origin loopback requests are allowed"}, status=HTTPStatus.FORBIDDEN)
+            host_valid = origin_valid = False
+        if not host_valid or not origin_valid:
+            self.send_json({"error": "Only same-origin requests to this Offcut server are allowed"}, status=HTTPStatus.FORBIDDEN)
             return False
         return True
 
@@ -3738,12 +3761,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="offcut", description="Run the Offcut creative workspace")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7862)
+    parser.add_argument("--host", default="127.0.0.1", help="Address to listen on (default: 127.0.0.1); use 0.0.0.0 for LAN access")
+    parser.add_argument("--port", type=int, default=7862, help="Port to listen on (default: 7862)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
-    if args.host not in LOOPBACK_HOSTS:
-        parser.error("Only loopback hosts are supported")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
@@ -3752,9 +3773,12 @@ def main() -> int:
     imported = STORE.import_existing(Path(offcut_cli.load_settings()["output_dir"]).expanduser())
     if imported:
         logging.info("Indexed %s existing Krea images into the Inbox board", imported)
-    server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
-    server.daemon_threads = True
-    logging.info("Offcut is available at http://%s:%s", args.host, args.port)
+    server = OffcutHTTPServer((args.host, args.port), RequestHandler)
+    if args.host in {"0.0.0.0", "::"}:
+        logging.info("Offcut is listening on %s:%s; open http://<this computer's LAN IP>:%s from another device", args.host, server.server_port, server.server_port)
+        logging.info("On this computer: http://%s:%s", "[::1]" if args.host == "::" else "127.0.0.1", server.server_port)
+    else:
+        logging.info("Offcut is available at http://%s:%s", f"[{args.host}]" if ":" in args.host else args.host, server.server_port)
     threading.Thread(target=STATE.warm_runtime, name="krea-runtime-warmup", daemon=True).start()
     try:
         server.serve_forever()

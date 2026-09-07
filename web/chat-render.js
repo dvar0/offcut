@@ -1,6 +1,6 @@
 import { openImageViewer } from "./images.js";
 import { renderPromptChange } from "./prompt-diff.js";
-import { $, findImage, formatCost, frameSeed, state } from "./shared.js";
+import { $, copyText, findImage, formatCost, frameSeed, state } from "./shared.js";
 
 export function messageText(message) {
   if (typeof message?.content === "string") return message.content;
@@ -630,7 +630,7 @@ function renderMessage(message, { streaming = false } = {}) {
     // rather than captured from the turn as it stood when the node was made.
     copy.addEventListener("click", async () => {
       const value = state.streamMessage?._uiId === uiId ? messageText(state.streamMessage) : text;
-      try { await navigator.clipboard.writeText(value); copy.textContent = "COPIED"; }
+      try { await copyText(value); copy.textContent = "COPIED"; }
       catch (_) { copy.textContent = "COPY FAILED"; }
     });
     body.append(copy);

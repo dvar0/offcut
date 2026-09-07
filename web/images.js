@@ -5,6 +5,7 @@ import { loraLabel } from "./library.js";
 import {
   $,
   api,
+  copyText,
   debounce,
   findImage,
   formatDate,
@@ -258,7 +259,7 @@ function renderFrameGlance(image) {
 
 async function copySeed(button, seed) {
   try {
-    await navigator.clipboard.writeText(String(seed));
+    await copyText(seed);
     button.classList.add("copied");
     window.setTimeout(() => button.classList.remove("copied"), 900);
   } catch (_) { /* Clipboard permission is the browser's to refuse; the seed is on screen anyway. */ }

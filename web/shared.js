@@ -2,6 +2,33 @@ export const $ = (selector, root = document) => root.querySelector(selector);
 
 export const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+export async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(value));
+    return;
+  }
+  // Plain HTTP on a LAN has no Clipboard API. The click-driven fallback still works there.
+  const focused = document.activeElement;
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  const field = document.createElement("textarea");
+  field.value = String(value);
+  field.readOnly = true;
+  field.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+  (focused?.closest("dialog[open]") || document.body).append(field);
+  try {
+    field.select();
+    if (!document.execCommand("copy")) throw new Error("Copy failed");
+  } finally {
+    field.remove();
+    focused?.focus({ preventScroll: true });
+    if (selection) {
+      selection.removeAllRanges();
+      for (const range of ranges) selection.addRange(range);
+    }
+  }
+}
+
 export const state = {
   presets: {},
   boards: [],

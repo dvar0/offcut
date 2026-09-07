@@ -101,7 +101,20 @@ Open **http://127.0.0.1:7862**. The first launch installs the Node dependencies 
 - **Styles** combines LoRAs with saved prompt recipes. Put Krea 2-compatible `.safetensors` files in `models/loras/`, refresh the library, and edit their triggers and strength there.
 - **Chat** can write prompts, generate, and compare images. Add a provider connection in Settings to use it.
 
-Generation stays on your GPU. Optional chat and enhancement send prompts and supplied images to your chosen provider. The app only listens on your own computer.
+Generation stays on your GPU. Optional chat and enhancement send prompts and supplied images to your chosen provider. By default, the app only listens on your own computer.
+
+### Access from your local network
+
+To open the UI from another computer or phone on your network, launch it with:
+
+```bash
+./offcut --host 0.0.0.0
+```
+
+On the other device, open `http://<your-computer's-LAN-IP>:7862` (for example,
+`http://192.168.1.50:7862`). You can also bind a specific address with
+`./offcut --host 192.168.1.50`, or choose a port with `--port 8080`.
+This shares the same workspace and GPU controls with devices that can reach it; there is no login.
 
 ### Generation routes
 

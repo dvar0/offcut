@@ -9,6 +9,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from http.client import HTTPConnection
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -267,7 +268,7 @@ class ValidationTests(unittest.TestCase):
 class LocalBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), offcut_server.RequestHandler)
+        cls.server = offcut_server.OffcutHTTPServer(("127.0.0.1", 0), offcut_server.RequestHandler)
         cls.server.daemon_threads = True
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -293,6 +294,22 @@ class LocalBoundaryTests(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(context.exception.code, 403)
         self.assertIsNone(context.exception.headers.get("Access-Control-Allow-Origin"))
+
+    def test_unbound_hosts_and_malformed_origins_are_rejected(self):
+        for headers in (
+            {"Host": "192.168.1.50"},
+            {"Host": "attacker.example"},
+            {"Host": "127.0.0.1:bad-port"},
+            {"Host": "user@127.0.0.1"},
+            {"Origin": "http://[broken"},
+            {"Origin": "null"},
+            {"Origin": self.base_url.replace("http:", "https:")},
+        ):
+            with self.subTest(headers=headers):
+                request = urllib.request.Request(f"{self.base_url}/api/health", headers=headers)
+                with self.assertRaises(urllib.error.HTTPError) as context:
+                    urllib.request.urlopen(request)
+                self.assertEqual(context.exception.code, 403)
 
     def test_settings_and_legacy_connections_serve_app(self):
         for path in ("/settings", "/connections"):
@@ -320,6 +337,67 @@ class LocalBoundaryTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as context:
             urllib.request.urlopen(request)
         self.assertEqual(context.exception.code, 400)
+
+
+class LanBoundaryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = offcut_server.OffcutHTTPServer(("0.0.0.0", 0), offcut_server.RequestHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        # A second loopback IP exercises the wildcard listener without needing a LAN adapter.
+        cls.origin = f"http://127.0.0.2:{cls.server.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    def request(self, path="/api/health", headers=None, method="GET", body=None):
+        connection = HTTPConnection("127.0.0.2", self.server.server_port, timeout=5)
+        try:
+            connection.request(method, path, body=body, headers=headers or {})
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            connection.close()
+
+    def test_interface_ip_serves_app_and_same_origin_api(self):
+        status, _, body = self.request("/create")
+        self.assertEqual(status, 200)
+        self.assertIn(b"<title>Offcut</title>", body)
+        status, headers, body = self.request(headers={"Origin": self.origin})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_same_origin_post_reaches_handler(self):
+        with patch.object(offcut_server.STATE, "close") as close:
+            status, _, body = self.request(
+                "/api/unload", method="POST", body=b"{}",
+                headers={"Origin": self.origin, "Content-Type": "application/json"},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        close.assert_called_once()
+
+    def test_server_hostname_is_accepted(self):
+        host = f"{self.server.server_name}:{self.server.server_port}"
+        status, _, _ = self.request(headers={"Host": host, "Origin": f"http://{host}"})
+        self.assertEqual(status, 200)
+
+    def test_cross_origin_and_foreign_hosts_stay_rejected(self):
+        for headers in (
+            {"Origin": "https://attacker.example"},
+            {"Origin": "http://127.0.0.2:1"},
+            {"Host": "attacker.example", "Origin": "http://attacker.example"},
+            {"Host": "192.168.1.50"},
+        ):
+            with self.subTest(headers=headers):
+                status, response_headers, _ = self.request(headers=headers)
+                self.assertEqual(status, 403)
+                self.assertNotIn("Access-Control-Allow-Origin", response_headers)
 
 
 class ChatServerTests(unittest.TestCase):
