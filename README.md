@@ -111,8 +111,9 @@ To open the UI from another computer or phone on your network, launch it with:
 ./offcut --host 0.0.0.0
 ```
 
-On the other device, open `http://<your-computer's-LAN-IP>:7862` (for example,
-`http://192.168.1.50:7862`). You can also bind a specific address with
+The startup log prints your LAN URL (for example, `http://192.168.1.50:7862`);
+open it on the other device. Links are clickable in terminals that support hyperlinks
+(often with Ctrl+click). You can also bind a specific address with
 `./offcut --host 192.168.1.50`, or choose a port with `--port 8080`.
 This shares the same workspace and GPU controls with devices that can reach it; there is no login.
 

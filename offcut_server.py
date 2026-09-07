@@ -11,6 +11,7 @@ import ctypes
 import difflib
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import math
@@ -21,6 +22,7 @@ import re
 import secrets
 import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -3759,6 +3761,42 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def lan_addresses(family: int) -> list[str]:
+    """Find active interface addresses without needing an Internet connection."""
+    addresses = []
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "-6" if family == socket.AF_INET6 else "-4", "address", "show", "up", "scope", "global"],
+            capture_output=True, text=True, check=True, timeout=2,
+        )
+        addresses = [
+            address["local"]
+            for interface in json.loads(result.stdout)
+            if interface.get("operstate") != "DOWN"
+            for address in interface.get("addr_info", [])
+        ]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        pass
+    if not addresses:
+        # Also works on systems without Linux's ip command.
+        try:
+            addresses = [info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, family, socket.SOCK_STREAM)]
+        except OSError:
+            pass
+    return sorted({
+        str(address) for address in map(ipaddress.ip_address, addresses)
+        if not (address.is_loopback or address.is_link_local or address.is_unspecified)
+    })
+
+
+def terminal_url(host: str, port: int) -> str:
+    url = f"http://{'[' + host + ']' if ':' in host else host}:{port}"
+    # OSC 8 gives supporting terminals an explicit link; keep redirected logs plain text.
+    if sys.stderr.isatty() and os.environ.get("TERM") != "dumb":
+        return f"\033]8;;{url}\033\\{url}\033]8;;\033\\"
+    return url
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="offcut", description="Run the Offcut creative workspace")
     parser.add_argument("--host", default="127.0.0.1", help="Address to listen on (default: 127.0.0.1); use 0.0.0.0 for LAN access")
@@ -3775,10 +3813,14 @@ def main() -> int:
         logging.info("Indexed %s existing Krea images into the Inbox board", imported)
     server = OffcutHTTPServer((args.host, args.port), RequestHandler)
     if args.host in {"0.0.0.0", "::"}:
-        logging.info("Offcut is listening on %s:%s; open http://<this computer's LAN IP>:%s from another device", args.host, server.server_port, server.server_port)
-        logging.info("On this computer: http://%s:%s", "[::1]" if args.host == "::" else "127.0.0.1", server.server_port)
+        logging.info("On this computer: %s", terminal_url("::1" if args.host == "::" else "127.0.0.1", server.server_port))
+        addresses = lan_addresses(server.address_family)
+        for address in addresses:
+            logging.info("On your network: %s", terminal_url(address, server.server_port))
+        if not addresses:
+            logging.info("Listening on %s:%s; no LAN address detected", args.host, server.server_port)
     else:
-        logging.info("Offcut is available at http://%s:%s", f"[{args.host}]" if ":" in args.host else args.host, server.server_port)
+        logging.info("Offcut is available at %s", terminal_url(args.host, server.server_port))
     threading.Thread(target=STATE.warm_runtime, name="krea-runtime-warmup", daemon=True).start()
     try:
         server.serve_forever()
