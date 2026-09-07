@@ -1308,6 +1308,9 @@ class GenerationDraftTests(unittest.TestCase):
                 def __init__(self, *_args):
                     pass
 
+                def set_preset(self, preset):
+                    self.preset = preset
+
                 def set_dimensions(self, *_args):
                     pass
 
@@ -1320,12 +1323,13 @@ class GenerationDraftTests(unittest.TestCase):
                         "output_path": str(root / "outputs" / "image.png"),
                         "raw_prompt": kwargs["raw_prompt"],
                         "final_prompt": kwargs["prompt"],
-                        "preset": "turbo-int8",
+                        "preset": self.preset.name,
                         "width": 1024,
                         "height": 1024,
                         "seed": kwargs["seed"],
                         "steps": kwargs["steps"],
                         "guidance": kwargs["guidance"],
+                        **{key: kwargs[key] for key in ("raw_portion", "raw_steps") if key in kwargs},
                     }
 
             with patch.object(offcut_cli, "load_settings", return_value=settings), \
@@ -1350,8 +1354,8 @@ class GenerationDraftTests(unittest.TestCase):
     def test_blank_steps_and_guidance_stay_blank_in_the_board_draft(self):
         recorded = self.run_generation({"steps": None, "guidance": None})
         # The sampler and the stored image keep the preset's resolved values...
-        self.assertEqual(recorded["result"]["steps"], offcut_cli.PRESETS["turbo-int8"].default_steps)
-        self.assertEqual(recorded["result"]["guidance"], offcut_cli.PRESETS["turbo-int8"].default_guidance)
+        self.assertEqual(recorded["result"]["steps"], offcut_cli.PRESETS[offcut_cli.DEFAULT_PRESET].default_steps)
+        self.assertEqual(recorded["result"]["guidance"], offcut_cli.PRESETS[offcut_cli.DEFAULT_PRESET].default_guidance)
         # ...but the board draft must not turn AUTO into that default.
         self.assertIsNone(recorded["request"]["steps"])
         self.assertIsNone(recorded["request"]["guidance"])
@@ -1404,6 +1408,9 @@ class GenerationReuseTests(unittest.TestCase):
             def __init__(self, *_args):
                 pass
 
+            def set_preset(self, preset):
+                self.preset = preset
+
             def set_dimensions(self, *_args):
                 pass
 
@@ -1419,12 +1426,13 @@ class GenerationReuseTests(unittest.TestCase):
                     "output_path": str(output_path),
                     "raw_prompt": kwargs["raw_prompt"],
                     "final_prompt": kwargs["prompt"],
-                    "preset": "turbo-int8",
+                    "preset": self.preset.name,
                     "width": 1024,
                     "height": 1024,
                     "seed": kwargs["seed"],
                     "steps": kwargs["steps"],
                     "guidance": kwargs["guidance"],
+                    **{key: kwargs[key] for key in ("raw_portion", "raw_steps") if key in kwargs},
                 }
 
         with patch.object(offcut_cli, "load_settings", return_value=settings), \
@@ -1533,13 +1541,13 @@ class NegativePromptRouteTests(unittest.TestCase):
 
     def test_setting_a_negative_prompt_on_a_distilled_route_is_refused(self):
         current = {"preset": "turbo-int8", "negative_prompt": ""}
-        with self.assertRaisesRegex(ValueError, "raw-int8"):
+        with self.assertRaisesRegex(ValueError, "Raw"):
             offcut_server.validate_chat_setting_patch({"negative_prompt": "blurry, watermark"}, current)
 
     def test_switching_to_a_distilled_route_clears_a_stranded_negative(self):
         current = {"preset": "raw-int8", "negative_prompt": "blurry, watermark"}
         candidate = offcut_server.validate_chat_setting_patch({"preset": "turbo-int8"}, current)
-        self.assertEqual(candidate["preset"], "turbo-int8")
+        self.assertEqual(candidate["preset"], offcut_cli.DEFAULT_PRESET)
         self.assertEqual(candidate["negative_prompt"], "")
 
 
@@ -1565,8 +1573,8 @@ class GuidanceRouteTests(unittest.TestCase):
     def test_switching_to_a_distilled_route_resets_a_stranded_guidance(self):
         current = {"preset": "raw-int8", "guidance": 3.5}
         candidate = offcut_server.validate_chat_setting_patch({"preset": "turbo-int8"}, current)
-        self.assertEqual(candidate["preset"], "turbo-int8")
-        self.assertEqual(candidate["guidance"], 0.0)
+        self.assertEqual(candidate["preset"], offcut_cli.DEFAULT_PRESET)
+        self.assertIsNone(candidate["guidance"])
 
     def test_the_undistilled_route_still_accepts_guidance(self):
         current = {"preset": "raw-int8", "guidance": 3.5}

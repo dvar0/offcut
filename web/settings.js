@@ -1,6 +1,9 @@
 import { renderConnections } from "./connections.js";
-import { $, $$, api, escapeHtml, routeUsesGuidance, state } from "./shared.js";
+import { $, $$, api, escapeHtml, presetLabel, routeUsesGuidance, state } from "./shared.js";
 import { currentPage } from "./workspace.js";
+import { bindHybridControls } from "./sampling.js";
+
+let coverHybridControls;
 
 export function renderSettings() {
   renderAppearance();
@@ -35,11 +38,14 @@ function renderCoverRecipe() {
   $("#coverWidth").value = recipe.width;
   $("#coverHeight").value = recipe.height;
   $("#coverSteps").value = recipe.steps;
+  $("#coverTurboSteps").value = recipe.preset === "raw-int8-to-turbo" ? recipe.steps : 12;
   $("#coverGuidance").value = recipe.guidance;
+  $("#coverRawPortion").value = recipe.raw_portion ?? 8;
+  $("#coverRawSteps").value = recipe.raw_steps ?? 52;
   $("#coverLoraStrength").value = recipe.lora_strength;
   syncCoverGuidance();
   if (summary) {
-    summary.innerHTML = `${escapeHtml(recipe.preset.toUpperCase())} · ${recipe.width}×${recipe.height} · SEED <b>${escapeHtml(recipe.seed)}</b> · LORA ${Number(recipe.lora_strength).toFixed(2)}`;
+    summary.innerHTML = `${escapeHtml(presetLabel(recipe.preset))} · ${recipe.width}×${recipe.height} · SEED <b>${escapeHtml(recipe.seed)}</b> · LORA ${Number(recipe.lora_strength).toFixed(2)}`;
   }
 }
 
@@ -53,6 +59,13 @@ function syncCoverGuidance() {
   input.disabled = !usesGuidance;
   field.classList.toggle("disabled", !usesGuidance);
   if (!usesGuidance) input.value = "0";
+  const hybrid = $("#coverPreset").value === "raw-int8-to-turbo";
+  field.querySelector("span").textContent = hybrid ? "RAW GUIDANCE" : "GUIDANCE";
+  $("#coverStepsField").hidden = hybrid;
+  $("#coverSteps").disabled = hybrid;
+  $("#coverHybridControls").hidden = !hybrid;
+  for (const id of ["coverRawCount", "coverRawSteps", "coverTurboSteps"]) $(`#${id}`).disabled = !hybrid;
+  coverHybridControls?.refresh();
 }
 
 async function saveCoverRecipe(event) {
@@ -71,8 +84,12 @@ async function saveCoverRecipe(event) {
           preset: $("#coverPreset").value,
           width: Number($("#coverWidth").value),
           height: Number($("#coverHeight").value),
-          steps: Number($("#coverSteps").value),
+          steps: Number($($("#coverPreset").value === "raw-int8-to-turbo" ? "#coverTurboSteps" : "#coverSteps").value),
           guidance: Number($("#coverGuidance").value),
+          ...($("#coverPreset").value === "raw-int8-to-turbo" ? {
+            raw_portion: Number($("#coverRawPortion").value),
+            raw_steps: Number($("#coverRawSteps").value),
+          } : {}),
           lora_strength: Number($("#coverLoraStrength").value),
         },
       }),
@@ -150,8 +167,18 @@ function renderAppearance() {
 }
 
 export function initSettings() {
+  coverHybridControls = bindHybridControls({
+    count: "coverRawCount", portion: "coverRawPortion", rawDensity: "coverRawSteps", turboDensity: "coverTurboSteps",
+    width: "coverWidth", height: "coverHeight", readout: "coverHybridReadout", minus: "coverRawCountMinus", plus: "coverRawCountPlus",
+  });
   $("#coverRecipeForm").addEventListener("submit", saveCoverRecipe);
-  $("#coverPreset").addEventListener("change", syncCoverGuidance);
+  $("#coverPreset").addEventListener("change", () => {
+    const preset = $("#coverPreset").value;
+    $("#coverSteps").value = preset === "raw-int8" ? 52 : preset === "raw-int8-to-turbo" ? 12 : 8;
+    $("#coverTurboSteps").value = 12;
+    $("#coverGuidance").value = preset === "raw-int8" ? 3.5 : preset === "raw-int8-to-turbo" ? 3 : 0;
+    syncCoverGuidance();
+  });
   // The link navigates through the generic [data-route] handler; this only makes sure the panel it
   // is pointing at is open when the page arrives.
   $("#coverRecipeLink").addEventListener("click", () => $("#coverPanel")?.setAttribute("open", ""));

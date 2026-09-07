@@ -118,6 +118,23 @@ class AgentExperienceTests(unittest.TestCase):
         self.assertFalse(result["settings"]["enhance"])
         self.assertFalse(result["generation_performed"])
         self.assertEqual(server.curated_image(image)["seed"], "9007199254740993")
+        self.assertTrue(result["route_migrated"])
+        self.assertIn("not an exact reproduction", result["note"])
+
+    def test_hybrid_recipe_restore_keeps_both_schedule_densities_and_handoff(self):
+        image = self.store.record_image(self.board["id"], {
+            "output_path": str(self.root / "hybrid.png"), "raw_prompt": "fox", "final_prompt": "ink, fox",
+            "preset": "raw-int8-to-turbo", "width": 1024, "height": 1024,
+            "seed": 9007199254740993, "steps": 15, "guidance": 3,
+            "raw_portion": 16.67, "raw_steps": 60,
+        }, {"negative_prompt": "watermark"})
+        context = self.turn()
+        result = server.execute_chat_tool(context, "restore_image_settings", {"image_id": image["id"]})
+        settings = self.store.get_board(self.board["id"])["settings"]
+        self.assertEqual((settings["raw_portion"], settings["raw_steps"], settings["steps"]), (16.67, 60, 15))
+        self.assertEqual((settings["negative_prompt"], settings["guidance"]), ("watermark", 3))
+        self.assertEqual(settings["seed"], "9007199254740993")
+        self.assertFalse(result["route_migrated"])
 
     def test_seed_policy_and_active_styles_survive_recording(self):
         for requested in (None, "9007199254740993"):
@@ -129,6 +146,81 @@ class AgentExperienceTests(unittest.TestCase):
             self.assertEqual(settings["styles"], ["style-id"])
             self.assertIsNone(settings["steps"])
             self.assertIsNone(settings["guidance"])
+
+    def test_agent_changes_executed_raw_steps_and_returns_the_ui_plan(self):
+        context = self.turn(message="Try 9 Raw steps, but don't generate yet")
+        events = []
+        result = server.execute_chat_tool(context, "update_generation_settings", {
+            "preset": "raw-int8-to-turbo", "raw_start_steps": 9,
+        }, emit=events.append)
+        settings = result["settings"]
+        self.assertEqual(settings["raw_start_steps"], 9)
+        self.assertEqual(settings["sampling_plan"]["label"], "9 Raw steps → 9 Turbo steps")
+        self.assertEqual(settings["sampling_setup"], {"raw_full_pass_steps": 52, "turbo_full_pass_steps": 12})
+        self.assertFalse(result["generation_performed"])
+        self.assertNotIn("raw_steps", settings)
+        self.assertNotIn("raw_portion", settings)
+        self.assertNotIn("steps", settings)
+        stored = self.store.get_board(self.board["id"])["settings"]
+        self.assertEqual(stored["raw_steps"], 52)
+        self.assertAlmostEqual(stored["raw_portion"], 9 / 52 * 100)
+        self.assertNotIn("raw_start_steps", stored)
+        self.assertNotIn("sampling_plan", stored)
+        self.assertEqual(events[-1]["settings"], stored)
+        reloaded = server.execute_chat_tool(self.turn(), "get_workspace_state", {})
+        self.assertEqual(reloaded["settings"]["sampling_plan"], settings["sampling_plan"])
+        server.STATE.generate.assert_not_called()
+
+    def test_agent_full_pass_changes_preserve_count_and_raw_defaults_reset(self):
+        context = self.turn()
+        server.execute_chat_tool(context, "update_generation_settings", {"preset": "raw-int8-to-turbo", "raw_start_steps": 9})
+        result = server.execute_chat_tool(context, "update_generation_settings", {"raw_full_pass_steps": 60, "turbo_full_pass_steps": 15})
+        self.assertEqual(result["settings"]["raw_start_steps"], 9)
+        self.assertEqual(context["settings"]["raw_portion"], 15)
+        self.assertEqual(context["settings"]["steps"], 15)
+        result = server.execute_chat_tool(context, "update_generation_settings", {
+            "raw_start_steps": None, "raw_full_pass_steps": None, "turbo_full_pass_steps": None,
+        })
+        self.assertEqual(result["settings"]["sampling_plan"]["label"], "4 Raw steps → 11 Turbo steps")
+        self.assertEqual(context["settings"]["raw_portion"], 8)
+        # Width/height edits recalculate the continuation using the new frame size.
+        result = server.execute_chat_tool(context, "set_aspect_ratio", {"aspect_ratio": "16:9"})
+        current = context["settings"]
+        plan = server.offcut_cli.hybrid_step_plan(current["width"], current["height"])
+        self.assertEqual(result["settings"]["sampling_plan"]["turbo_finish_steps"], plan["turbo"])
+        result = server.execute_chat_tool(context, "update_generation_settings", {"preset": "raw-int8-turbo-lora"})
+        self.assertNotIn("sampling_plan", result["settings"])
+        self.assertNotIn("raw_portion", context["settings"])
+
+    def test_ambiguous_or_unusable_agent_sampling_changes_never_save(self):
+        context = self.turn()
+        server.execute_chat_tool(context, "update_generation_settings", {"preset": "raw-int8-to-turbo"})
+        revision = self.store.get_board(self.board["id"])["settings_revision"]
+        for args in ({"raw_start_steps": 0}, {"raw_start_steps": 52}, {"raw_start_steps": True},
+                     {"raw_start_steps": 4.5}, {"raw_steps": 9}, {"raw_portion": 8}, {"steps": 9},
+                     {"preset": "raw-int8", "raw_start_steps": 9},
+                     {"preset": "raw-int8-turbo-lora", "turbo_full_pass_steps": 12}):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                server.execute_chat_tool(context, "update_generation_settings", args)
+            self.assertEqual(self.store.get_board(self.board["id"])["settings_revision"], revision)
+        for args in ({"raw_start_steps": 9, "raw_portion": 8},
+                     {"raw_full_pass_steps": 52, "raw_steps": 60},
+                     {"turbo_full_pass_steps": 12, "steps": 15}):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                server.validate_chat_setting_patch(args, context["settings"])
+
+    def test_agent_sampling_projection_preserves_historical_percentage(self):
+        settings = {"preset": "raw-int8-to-turbo", "raw_portion": 16.67, "raw_steps": 52, "steps": 12}
+        view = server.agent_workspace_settings(settings)
+        self.assertEqual(view["sampling_plan"]["label"], "9 Raw steps → 9 Turbo steps")
+        self.assertEqual(settings["raw_portion"], 16.67)
+        unchanged = server.validate_chat_setting_patch({"seed": "123"}, settings)
+        self.assertEqual(unchanged["raw_portion"], 16.67)
+        # Invalid browser drafts are readable and can be repaired through named setup controls.
+        settings["raw_steps"] = 0
+        self.assertIn("error", server.agent_workspace_settings(settings)["sampling_plan"])
+        fixed = server.validate_chat_setting_patch({"raw_full_pass_steps": 52}, settings)
+        self.assertEqual(server.agent_workspace_settings(fixed)["raw_start_steps"], 9)
 
     def test_creative_brief_preserves_approval_and_reference_purpose(self):
         first, second = self.frame(), self.frame()

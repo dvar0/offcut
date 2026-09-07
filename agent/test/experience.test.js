@@ -25,6 +25,31 @@ test("prompt receipts keep one prompt and full UI details", () => {
   assert.equal(result.details.prompt_change.after, prompt);
   assert.ok(result.content[0].text.length < JSON.stringify(details).length / 2);
 });
+test("Raw UI steps and full-pass setup have distinct tool arguments", () => {
+  const args = { preset: "raw-int8-to-turbo", raw_start_steps: 9 };
+  assert.deepEqual(validate("update_generation_settings", args), args);
+  const setup = { raw_full_pass_steps: 60, turbo_full_pass_steps: 15 };
+  assert.deepEqual(validate("update_generation_settings", setup), setup);
+  const reset = { raw_start_steps: null, raw_full_pass_steps: null, turbo_full_pass_steps: null };
+  assert.deepEqual(validate("update_generation_settings", reset), reset);
+  // Pi coerces scalar types before validation (as it does for the existing numeric tools).
+  // The Python boundary tests cover malformed raw requests; here test the adapter's bounds.
+  for (const value of [100, "nine"]) {
+    assert.throws(() => validate("update_generation_settings", { raw_start_steps: value }));
+  }
+  const properties = tools.find(tool => tool.name === "update_generation_settings").parameters.properties;
+  assert.equal(properties.raw_steps, undefined);
+  assert.equal(properties.raw_portion, undefined);
+});
+test("the step plan survives model receipt compaction without losing the no-generation receipt", () => {
+  const plan = { raw_start_steps: 9, turbo_finish_steps: 9, label: "9 Raw steps → 9 Turbo steps" };
+  const result = resultToToolResult({ generation_performed: false,
+    settings: { raw_start_steps: 9, sampling_plan: plan, sampling_setup: { raw_full_pass_steps: 52, turbo_full_pass_steps: 12 } },
+  }, createImageLookup({}));
+  const receipt = JSON.parse(result.content[0].text);
+  assert.equal(receipt.generation_performed, false);
+  assert.deepEqual(receipt.settings.sampling_plan, plan);
+});
 test("generation receipts distinguish reused frames and retain transcript metadata", () => {
   const result = resultToToolResult({ image_id: "frame", attempt_id: 1, reused: true, generation_performed: false,
     image: { id: "frame", seed: "9223372036854775807", width: 1024, height: 1024, raw_prompt: "fox", final_prompt: "ink, fox" } }, createImageLookup({}));

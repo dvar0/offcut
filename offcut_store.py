@@ -278,6 +278,14 @@ class Store:
             # Created after the ALTER rather than in the script above, which runs before it and on
             # an existing database would name a column that is not there yet.
             db.execute("CREATE INDEX IF NOT EXISTS images_run_key ON images(board_id, kind, run_key)")
+            # Migrate live selections, never the historical image/attempt recipes. The retired
+            # standalone Turbo weights are not interchangeable with raw + Turbo LoRA.
+            for row in db.execute("SELECT id, settings_json FROM boards").fetchall():
+                settings = self._json(row["settings_json"], {})
+                if settings.get("preset") == "turbo-int8":
+                    settings["preset"] = "raw-int8-turbo-lora"
+                    db.execute("UPDATE boards SET settings_json = ?, settings_revision = settings_revision + 1 WHERE id = ?",
+                               (json.dumps(settings), row["id"]))
             chat_columns = {row["name"] for row in db.execute("PRAGMA table_info(chat_sessions)").fetchall()}
             if "creative_brief_json" not in chat_columns:
                 db.execute("ALTER TABLE chat_sessions ADD COLUMN creative_brief_json TEXT NOT NULL DEFAULT '{}'")
@@ -499,6 +507,8 @@ class Store:
                     "steps",
                     "guidance",
                     "negative_prompt",
+                    "raw_portion",
+                    "raw_steps",
                     "styles",
                     "loras",
                     "enhance",
@@ -580,6 +590,8 @@ class Store:
                     "steps",
                     "guidance",
                     "negative_prompt",
+                    "raw_portion",
+                    "raw_steps",
                     "seed",
                     "styles",
                     "loras",
@@ -590,6 +602,8 @@ class Store:
                 )
                 if key in request
             }
+            if board_settings.get("preset") == "turbo-int8":
+                board_settings["preset"] = "raw-int8-turbo-lora"
             if kind == "generated":
                 db.execute(
                     """UPDATE boards SET settings_json = ?, settings_revision = settings_revision + 1,

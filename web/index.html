@@ -59,8 +59,8 @@
             <div class="panel-section">
               <div class="section-heading compact"><span>02</span><h2>MODEL ROUTE</h2></div>
               <div class="route-switch" id="routeSwitch">
-                <label><input type="radio" name="preset" value="turbo-int8" checked><span>TURBO<small>DIRECT</small></span></label>
-                <label><input type="radio" name="preset" value="raw-int8-turbo-lora"><span>RAW + T<small>LORA</small></span></label>
+                <label><input type="radio" name="preset" value="raw-int8-turbo-lora" checked><span>TURBO<small>FAST</small></span></label>
+                <label><input type="radio" name="preset" value="raw-int8-to-turbo"><span>RAW → TURBO<small>TWO STAGE</small></span></label>
                 <label><input type="radio" name="preset" value="raw-int8"><span>RAW<small>FULL</small></span></label>
               </div>
             </div>
@@ -94,12 +94,33 @@
 
             <details class="advanced panel-section">
               <summary><span>ADVANCED CONTROLS</span><i>+</i></summary>
-              <div class="advanced-grid">
+              <div class="advanced-grid" id="basicSamplingControls">
                 <label><span>SEED</span><span class="input-action"><input id="seed" inputmode="numeric" placeholder="RANDOM"><button id="randomSeed" type="button">RND</button></span></label>
-                <label><span>STEPS</span><input id="steps" type="number" min="1" max="100" placeholder="AUTO"></label>
-                <label><span>GUIDANCE</span><input id="guidance" type="number" min="0" max="20" step="0.1" placeholder="AUTO"></label>
+                <label id="stepsField"><span>STEPS</span><input id="steps" type="number" min="1" max="100" placeholder="AUTO"></label>
+                <label><span id="guidanceLabel">GUIDANCE</span><input id="guidance" type="number" min="0" max="20" step="0.1" placeholder="AUTO"></label>
               </div>
-              <label class="negative-field"><span>NEGATIVE PROMPT</span><textarea id="negativePrompt" rows="2" placeholder="Raw route only"></textarea></label>
+              <div id="hybridControls" hidden>
+                <div class="raw-step-control">
+                  <label for="rawCount">RAW STEPS</label>
+                  <div class="stepper">
+                    <button type="button" id="rawCountMinus" aria-label="Fewer Raw steps">−</button>
+                    <input id="rawCount" type="number" min="1" max="51" step="1" value="4" required>
+                    <button type="button" id="rawCountPlus" aria-label="More Raw steps">+</button>
+                  </div>
+                </div>
+                <p class="step-readout" id="hybridReadout" aria-live="polite">4 Raw steps → 11 Turbo steps</p>
+                <p class="sampling-note">More Raw steps takes longer and can change the composition.</p>
+                <input id="rawPortion" type="hidden">
+              </div>
+              <label class="negative-field"><span id="negativeLabel">NEGATIVE PROMPT</span><textarea id="negativePrompt" rows="2" placeholder="Raw stages only"></textarea></label>
+              <details class="sampling-setup" id="samplingSetup" hidden>
+                <summary>Sampling setup</summary>
+                <div class="advanced-grid hybrid-grid">
+                  <label><span>RAW FULL-PASS STEPS</span><input id="rawSteps" type="number" min="2" max="100" placeholder="52"></label>
+                  <label><span>TURBO FULL-PASS STEPS</span><input id="turboSteps" type="number" min="2" max="100" placeholder="12"></label>
+                </div>
+                <p class="sampling-note">A complete pass would use these counts. Raw uses the beginning; Turbo uses the remaining part. Leave at 52 / 12 for the usual setup.</p>
+              </details>
             </details>
 
             <div class="form-footer">
@@ -348,16 +369,36 @@
                 <label><span>SEED</span><input id="coverSeed" required autocomplete="off" inputmode="numeric"></label>
                 <label><span>ROUTE</span>
                   <select id="coverPreset">
-                    <option value="turbo-int8">TURBO INT8</option>
-                    <option value="raw-int8-turbo-lora">RAW + TURBO LORA</option>
-                    <option value="raw-int8">RAW INT8</option>
+                    <option value="raw-int8-turbo-lora">TURBO</option>
+                    <option value="raw-int8-to-turbo">RAW → TURBO</option>
+                    <option value="raw-int8">RAW</option>
                   </select>
                 </label>
                 <label><span>WIDTH</span><input id="coverWidth" type="number" min="256" max="2048" step="16" required></label>
                 <label><span>HEIGHT</span><input id="coverHeight" type="number" min="256" max="2048" step="16" required></label>
-                <label><span>STEPS</span><input id="coverSteps" type="number" min="1" max="100" required></label>
+                <label id="coverStepsField"><span>STEPS</span><input id="coverSteps" type="number" min="1" max="100" required></label>
                 <label id="coverGuidanceField"><span>GUIDANCE</span><input id="coverGuidance" type="number" min="0" max="20" step="0.1" required></label>
                 <label><span>LORA STRENGTH</span><input id="coverLoraStrength" type="number" min="-100" max="100" step="0.05" required title="Deliberately higher than you would generate at. A cover is meant to make the adapter's hand obvious, and nothing else reads this value."></label>
+              </div>
+              <div id="coverHybridControls" hidden>
+                <div class="raw-step-control">
+                  <label for="coverRawCount">RAW STEPS</label>
+                  <div class="stepper">
+                    <button type="button" id="coverRawCountMinus" aria-label="Fewer Raw steps for covers">−</button>
+                    <input id="coverRawCount" type="number" min="1" max="51" step="1" value="4" required>
+                    <button type="button" id="coverRawCountPlus" aria-label="More Raw steps for covers">+</button>
+                  </div>
+                </div>
+                <p class="step-readout" id="coverHybridReadout" aria-live="polite"></p>
+                <input id="coverRawPortion" type="hidden">
+                <details class="sampling-setup">
+                  <summary>Sampling setup</summary>
+                  <div class="cover-recipe-grid">
+                    <label><span>RAW FULL-PASS STEPS</span><input id="coverRawSteps" type="number" min="2" max="100" value="52" required></label>
+                    <label><span>TURBO FULL-PASS STEPS</span><input id="coverTurboSteps" type="number" min="2" max="100" value="12" required></label>
+                  </div>
+                  <p class="sampling-note">A complete pass would use these counts. Only the beginning of Raw and the remaining part of Turbo run.</p>
+                </details>
               </div>
               <div class="editor-actions">
                 <button class="accent-button" type="submit">SAVE RECIPE</button>

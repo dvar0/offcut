@@ -2,7 +2,8 @@ import { populateConnectionSelectors } from "./connections.js";
 import { loadBoardImages, renderBoardThumbnails } from "./images.js";
 import { paintCoverProgress, renderActiveLibrary } from "./library.js";
 import { clearPromptDiff, forgetPromptTurn } from "./prompt-diff.js";
-import { $, $$, api, frameSeed, frameUsesGuidance, showFormError, state } from "./shared.js";
+import { bindHybridControls } from "./sampling.js";
+import { $, $$, api, frameSeed, frameUsesGuidance, routeUsesGuidance, showFormError, state } from "./shared.js";
 import {
   currentPage,
   flushBoardDraft,
@@ -42,17 +43,26 @@ function selectedPreset() {
   return $("input[name=preset]:checked").value;
 }
 
+let hybridControls;
+
 function updateRoute() {
   const preset = selectedPreset();
-  // The field is disabled rather than cleared so switching back to raw restores what was typed,
-  // but the draft and the generation payload both drop it while a distilled route is selected.
-  $("#negativePrompt").disabled = preset !== "raw-int8";
-  $("#negativePrompt").placeholder = preset === "raw-int8" ? "What to steer away from" : "Raw route only";
-  // A distilled route samples at cfg 1.0 by design; any other guidance ruins the frame rather
-  // than steering it. Disabled the same way as the negative prompt, and dropped from the payload
-  // below, so switching back to raw restores whatever was typed.
-  $("#guidance").disabled = preset !== "raw-int8";
-  $("#guidance").placeholder = preset === "raw-int8" ? "AUTO" : "FIXED AT 0";
+  const hybrid = preset === "raw-int8-to-turbo";
+  const guided = routeUsesGuidance(preset);
+  $("#negativePrompt").disabled = !guided;
+  $("#negativePrompt").placeholder = guided ? "What to steer away from" : "Raw stages only";
+  $("#negativeLabel").textContent = hybrid ? "NEGATIVE PROMPT · RAW STAGE ONLY" : "NEGATIVE PROMPT";
+  $("#guidance").disabled = !guided;
+  $("#guidance").placeholder = guided ? (hybrid ? "AUTO · 3.0" : "AUTO · 3.5") : "FIXED AT 0";
+  $("#guidanceLabel").textContent = hybrid ? "RAW GUIDANCE" : "GUIDANCE";
+  $("#stepsField").hidden = hybrid;
+  $("#steps").disabled = hybrid;
+  $("#steps").placeholder = preset === "raw-int8" ? "AUTO · 52" : "AUTO · 8";
+  $("#basicSamplingControls").classList.toggle("hybrid-grid", hybrid);
+  $("#hybridControls").hidden = !hybrid;
+  $("#samplingSetup").hidden = !hybrid;
+  for (const id of ["rawCount", "rawSteps", "turboSteps"]) $(`#${id}`).disabled = !hybrid;
+  hybridControls?.refresh();
   $("#generateButton").disabled = state.generating || !routeReady();
   updateRuntime();
 }
@@ -160,6 +170,7 @@ function syncFrameControls() {
   const actual = currentMegapixels();
   const label = ratioLabel();
   $("#frameReadout").textContent = actual ? `${actual.toFixed(2)} MP${label ? ` · ${label}` : ""}` : "";
+  hybridControls?.refresh();
 }
 
 function toggleAspectLock() {
@@ -191,7 +202,7 @@ export function applySettings(settings) {
   // the safe direction: a redundant write costs a revision, a skipped one loses the edit.
   state.draftSaved = null;
   if (typeof settings.prompt === "string") $("#prompt").value = settings.prompt;
-  const preset = settings.preset || "turbo-int8";
+  const preset = settings.preset === "turbo-int8" ? "raw-int8-turbo-lora" : settings.preset || "raw-int8-turbo-lora";
   const radio = $(`input[name=preset][value="${CSS.escape(preset)}"]`);
   if (radio) radio.checked = true;
   if (settings.width) $("#width").value = settings.width;
@@ -199,7 +210,10 @@ export function applySettings(settings) {
   state.aspectRatio = Number($("#width").value) / Number($("#height").value) || 1;
   syncFrameControls();
   $("#steps").value = settings.steps ?? "";
+  $("#turboSteps").value = preset === "raw-int8-to-turbo" ? settings.steps ?? "" : "";
   $("#guidance").value = settings.guidance ?? "";
+  $("#rawPortion").value = settings.raw_portion ?? "";
+  $("#rawSteps").value = settings.raw_steps ?? "";
   $("#seed").value = settings.seed ?? "";
   $("#negativePrompt").value = settings.negative_prompt || "";
   const enhancerConnection = state.connections.find((connection) => connection.id === settings.connection_id);
@@ -238,6 +252,8 @@ export async function reuseImage(image = state.currentImage) {
     // never a chosen value there in the first place.
     guidance: frameUsesGuidance(image) ? image.guidance : null,
     negative_prompt: image.negative_prompt,
+    raw_portion: image.metadata?.raw_portion,
+    raw_steps: image.metadata?.raw_steps,
     loras: image.loras,
     styles: image.metadata?.styles,
     enhance: image.enhance,
@@ -249,6 +265,7 @@ export async function reuseImage(image = state.currentImage) {
   scheduleBoardDraft();
   navigate("create", image.board_id);
   $("#prompt").focus();
+  if (image.preset === "turbo-int8") showFormError("This frame used the retired standalone Turbo checkpoint. Settings now use raw + Turbo LoRA; the weights differ, so this is not an exact reproduction recipe.");
 }
 
 export async function reusePrompt(image = state.currentImage) {
@@ -266,7 +283,7 @@ export async function reusePrompt(image = state.currentImage) {
 
 export function generationPayload() {
   const seed = $("#seed").value.trim();
-  const steps = $("#steps").value.trim();
+  const steps = $(selectedPreset() === "raw-int8-to-turbo" ? "#turboSteps" : "#steps").value.trim();
   const guidance = $("#guidance").value.trim();
   return {
     board_id: state.currentBoardId,
@@ -278,8 +295,12 @@ export function generationPayload() {
     // 2^53 and silently sample a different frame than the pinned seed asked for.
     seed: seed || null,
     steps: steps ? Number(steps) : null,
-    guidance: guidance && selectedPreset() === "raw-int8" ? Number(guidance) : null,
-    negative_prompt: selectedPreset() === "raw-int8" ? $("#negativePrompt").value : "",
+    guidance: guidance && routeUsesGuidance(selectedPreset()) ? Number(guidance) : null,
+    negative_prompt: routeUsesGuidance(selectedPreset()) ? $("#negativePrompt").value : "",
+    ...(selectedPreset() === "raw-int8-to-turbo" ? {
+      raw_portion: $("#rawPortion").value === "" ? null : Number($("#rawPortion").value),
+      raw_steps: $("#rawSteps").value === "" ? null : Number($("#rawSteps").value),
+    } : {}),
     loras: state.selectedLoras,
     styles: state.selectedStyles,
     enhance: $("#enhance").checked,
@@ -354,6 +375,7 @@ function paintGenerateLabel() {
 async function generate(event) {
   event?.preventDefault();
   if (state.generating) return;
+  if (!$("#generateForm").reportValidity()) return;
   showFormError("");
   state.stopping = false;
   state.batchIndex = 0;
@@ -525,8 +547,17 @@ export function updateProgress(progress) {
 }
 
 export function initGeneration() {
+  hybridControls = bindHybridControls({
+    count: "rawCount", portion: "rawPortion", rawDensity: "rawSteps", turboDensity: "turboSteps",
+    width: "width", height: "height", readout: "hybridReadout", minus: "rawCountMinus", plus: "rawCountPlus",
+  });
   $("#enhance").addEventListener("change", (event) => { $("#enhancerControls").hidden = !event.target.checked; });
-  $$("input[name=preset]").forEach((input) => input.addEventListener("change", updateRoute));
+  $$("input[name=preset]").forEach((input) => input.addEventListener("change", () => {
+    $("#steps").value = "";
+    $("#turboSteps").value = "";
+    $("#guidance").value = "";
+    updateRoute();
+  }));
   $$("#ratioGrid button").forEach((button) => button.addEventListener("click", () => setResolution(button)));
   $$("#megapixelGrid button").forEach((button) => button.addEventListener("click", () => setMegapixels(Number(button.dataset.megapixels))));
   $("#ratioLock").addEventListener("click", toggleAspectLock);

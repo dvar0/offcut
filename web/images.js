@@ -245,7 +245,8 @@ function renderFrameGlance(image) {
     return;
   }
   const steps = document.createElement("span");
-  steps.textContent = `${image.steps} STEPS`;
+  const sampling = image.metadata?.sampling;
+  steps.textContent = sampling ? `${sampling.raw_executed_steps} RAW + ${sampling.turbo_executed_steps} TURBO` : `${image.steps} STEPS`;
   const seed = document.createElement("button");
   seed.type = "button";
   seed.className = "frame-seed";
@@ -321,8 +322,13 @@ function renderFrameDetails(image) {
     spec.append(specRow("BOARD", image.board_name || "--"), specRow("CREATED", formatDate(image.created_at)));
     return;
   }
-  spec.append(specRow("STEPS", String(image.steps)));
-  if (frameUsesGuidance(image)) spec.append(specRow("GUIDANCE", Number(image.guidance).toFixed(1)));
+  const hybrid = image.preset === "raw-int8-to-turbo";
+  if (!hybrid) spec.append(specRow("STEPS", String(image.steps)));
+  if (frameUsesGuidance(image)) spec.append(specRow(hybrid ? "RAW GUIDANCE" : "GUIDANCE", Number(image.guidance).toFixed(1)));
+  if (hybrid) {
+    const sampling = image.metadata?.sampling;
+    if (sampling) spec.append(specRow("STEPS", `${sampling.raw_executed_steps} Raw + ${sampling.turbo_executed_steps} Turbo`));
+  }
   spec.append(
     specRow("SEED", frameSeed(image)),
     specRow("BOARD", image.board_name || "--"),
@@ -353,7 +359,7 @@ function renderFrameDetails(image) {
     const negative = document.createElement("div");
     negative.className = "recipe-group";
     const heading = document.createElement("span");
-    heading.textContent = "NEGATIVE";
+    heading.textContent = hybrid ? "NEGATIVE · RAW STAGE ONLY" : "NEGATIVE";
     const body = document.createElement("p");
     body.textContent = image.negative_prompt;
     negative.append(heading, body);

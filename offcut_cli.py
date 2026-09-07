@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -102,11 +103,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "cover": {
         "prompt": DEFAULT_COVER_PROMPT,
         "seed": 20260904,
-        "preset": "turbo-int8",
+        "preset": "raw-int8-turbo-lora",
         "width": 1024,
         "height": 1024,
         "steps": 8,
         "guidance": 0.0,
+        "raw_portion": 8.0,
+        "raw_steps": 52,
         "lora_strength": DEFAULT_COVER_LORA_STRENGTH,
     },
     "enhancer": {
@@ -141,12 +144,6 @@ DOWNLOADS = {
         13_492_686_496,
         "5585a4a38c4bcfb6fde2d480a4aa6edf7f665721ebde56d30662c35a45f5fa5c",
     ),
-    "turbo-int8": Download(
-        "turbo-int8",
-        "diffusion_models/krea2_turbo_int8_convrot.safetensors",
-        13_492_686_496,
-        "8e4eeda70dd5037ab1ba2bef6b417f9f901e26093117cf397f741fc1fdaaf3f1",
-    ),
     "turbo-lora": Download(
         "turbo-lora",
         "loras/krea2_turbo_lora_rank_64_bf16.safetensors",
@@ -164,14 +161,10 @@ class Preset:
     turbo_lora: bool = False
     default_steps: int = 8
     default_guidance: float = 0.0
+    two_stage: bool = False
 
 
 PRESETS = {
-    "turbo-int8": Preset(
-        "turbo-int8",
-        "krea2_turbo_int8_convrot.safetensors",
-        turbo=True,
-    ),
     "raw-int8-turbo-lora": Preset(
         "raw-int8-turbo-lora",
         "krea2_raw_int8_convrot.safetensors",
@@ -185,7 +178,87 @@ PRESETS = {
         default_steps=52,
         default_guidance=3.5,
     ),
+    "raw-int8-to-turbo": Preset(
+        "raw-int8-to-turbo",
+        "krea2_raw_int8_convrot.safetensors",
+        turbo=False,
+        turbo_lora=True,
+        default_steps=12,
+        default_guidance=3.0,
+        two_stage=True,
+    ),
 }
+
+DEFAULT_PRESET = "raw-int8-turbo-lora"
+HYBRID_PRESET = "raw-int8-to-turbo"
+
+
+def migrate_preset(name: str) -> str:
+    """Translate active settings only. Historical image recipes keep their original route."""
+    return DEFAULT_PRESET if name == "turbo-int8" else name
+
+
+def hybrid_settings(preset: Preset, steps: int, raw_portion: Any = None, raw_steps: Any = None) -> dict[str, Any]:
+    if not preset.two_stage:
+        return {}
+    portion = 8.0 if raw_portion in (None, "") else raw_portion
+    density = 52 if raw_steps in (None, "") else raw_steps
+    if isinstance(portion, bool) or not isinstance(portion, (int, float)) or not math.isfinite(portion) or not 0 < portion < 100:
+        raise ValueError("Raw portion must be a finite percentage greater than 0 and less than 100; use Turbo or Raw for the endpoints")
+    if isinstance(density, bool) or not isinstance(density, int) or not 2 <= density <= 100:
+        raise ValueError("Raw schedule steps must be an integer between 2 and 100")
+    if not 2 <= steps <= 100:
+        raise ValueError("Turbo schedule steps must be between 2 and 100 for Raw → Turbo")
+    return {"raw_portion": float(portion), "raw_steps": density}
+
+
+def split_sigma_schedules(raw_sigmas: Any, turbo_sigmas: Any, raw_portion: float) -> tuple[Any, Any]:
+    """Cut the raw schedule, then sigma-lock the nearest valid turbo continuation.
+
+    Schedule densities are not executed step counts. The boundary stays nonzero in raw and
+    is exactly the first sigma in turbo; only the second stage runs to zero.
+    """
+    end = max(1, min(len(raw_sigmas) - 2, round((len(raw_sigmas) - 1) * raw_portion / 100)))
+    boundary = raw_sigmas[end]
+    if not 0 < float(boundary) < float(turbo_sigmas[0]):
+        raise ValueError("Raw handoff is outside the Turbo schedule")
+    candidates = [i for i in range(1, len(turbo_sigmas) - 1) if float(turbo_sigmas[i - 1]) > float(boundary)]
+    if not candidates:
+        raise ValueError("Turbo schedule has no non-terminal handoff")
+    start = min(candidates, key=lambda i: abs(float(turbo_sigmas[i]) - float(boundary)))
+    raw = raw_sigmas[:end + 1].clone()
+    turbo = turbo_sigmas[start:].clone()
+    turbo[0] = boundary
+    return raw, turbo
+
+
+def hybrid_step_plan(width: int, height: int, raw_portion: float = 8.0, raw_steps: int = 52, steps: int = 12) -> dict[str, int]:
+    """Preview Comfy's Flux/simple handoff without importing torch or loading the engine.
+
+    Keep in step with web/sampling.js. Float32 at each tensor operation matters near the
+    nearest-sigma boundary; Python's ordinary float arithmetic alone can pick a different step.
+    """
+    validate_dimensions(width, height)
+    recipe = hybrid_settings(PRESETS[HYBRID_PRESET], steps, raw_portion, raw_steps)
+    raw_steps, raw_portion = recipe["raw_steps"], recipe["raw_portion"]
+
+    def f32(value: float) -> float:
+        return struct.unpack("f", struct.pack("f", value))[0]
+
+    def schedule(shift: float, density: int) -> list[float]:
+        exp = f32(math.exp(shift))
+        result = []
+        for index in range(density):
+            time = f32((10000 - int(index * (10000 / density))) / 10000)
+            result.append(f32(exp / f32(exp + f32(f32(1 / time) - 1))))
+        return result
+
+    raw_count = max(1, min(raw_steps - 1, round(raw_steps * raw_portion / 100)))
+    boundary = schedule(raw_sampling_shift(width, height), raw_steps)[raw_count]
+    turbo = schedule(1.15, steps)
+    start = min((i for i in range(1, steps) if turbo[i - 1] > boundary), key=lambda i: abs(turbo[i] - boundary))
+    return {"raw": raw_count, "turbo": steps - start}
+
 
 # Comfy's own LoraLoader accepts -100 to 100 and comfy.model_patcher.add_patches never clamps:
 # the strength just scales the LoRA delta linearly into the weights, so nothing below this app
@@ -271,7 +344,9 @@ def load_settings() -> dict[str, Any]:
         "vae": str(comfy_root / "models/vae/qwen_image_vae.safetensors"),
         "lora_dirs": [str(APP_ROOT / "models/loras"), str(comfy_root / "models/loras")],
     })
-    return deep_merge(defaults, user_settings)
+    settings = deep_merge(defaults, user_settings)
+    settings["cover"]["preset"] = migrate_preset(settings["cover"]["preset"])
+    return settings
 
 
 def save_settings(settings: dict[str, Any]) -> Path:
@@ -549,6 +624,7 @@ class Runtime:
         import comfy.model_management
         import comfy.model_sampling
         import comfy.sample
+        import comfy.samplers
         import comfy.sd
         import comfy.utils
 
@@ -558,6 +634,7 @@ class Runtime:
         self.mm = comfy.model_management
         self.model_sampling = comfy.model_sampling
         self.sample = comfy.sample
+        self.samplers = comfy.samplers
         self.sd = comfy.sd
         self.utils = comfy.utils
 
@@ -658,7 +735,9 @@ class KreaEngine:
         self.base_model = runtime.sd.load_diffusion_model(str(checkpoint))
         self.model = self.base_model
         self.applied_loras: list[dict[str, Any]] = []
-        self.lora_key: tuple[Any, ...] | None = None
+        # At most the two stacks for a recipe. They share base_model's module and preserve
+        # patches_uuid across route changes; only Comfy's resident weight repatch remains.
+        self.lora_stacks: OrderedDict[tuple[Any, ...], tuple[Any, list[dict[str, Any]]]] = OrderedDict()
 
         self.clip = runtime.sd.load_clip(
             ckpt_paths=[str(text_encoder)],
@@ -677,17 +756,22 @@ class KreaEngine:
         self.load_peak_allocated = gib(torch.cuda.max_memory_allocated())
         self.load_peak_reserved = gib(torch.cuda.max_memory_reserved())
 
-    def _patch_raw_sampling(self) -> None:
+    def _sampling_model(self, model: Any, shift: float) -> Any:
         runtime = self.runtime
-        shift = raw_sampling_shift(self.width, self.height)
 
-        class RawKreaSampling(runtime.model_sampling.ModelSamplingFlux, runtime.model_sampling.CONST):
+        class KreaSampling(runtime.model_sampling.ModelSamplingFlux, runtime.model_sampling.CONST):
             pass
 
-        sampling = RawKreaSampling(self.model.model.model_config)
+        sampling = KreaSampling(model.model.model_config)
         sampling.set_parameters(shift=shift)
-        self.model = self.model.clone()
-        self.model.add_object_patch("model_sampling", sampling)
+        patched = model.clone()
+        patched.add_object_patch("model_sampling", sampling)
+        return patched
+
+    def set_preset(self, preset: Preset) -> None:
+        if preset.checkpoint != self.preset.checkpoint:
+            raise ValueError("Changing checkpoints requires a new engine")
+        self.preset = preset
 
     def set_loras(self, loras: list[tuple[Path, float]], on_change: Any | None = None) -> None:
         """Swap the LoRA stack without reloading anything from disk.
@@ -698,13 +782,29 @@ class KreaEngine:
         GPU. CLIP is never patched (strength_clip is 0), which is also why the conditioning
         cache stays valid across a swap.
         """
-        runtime = self.runtime
         requested = list(loras)
+        turbo = []
         if self.preset.turbo_lora:
             turbo_lora = Path(self.settings["model_dir"]).expanduser() / "loras" / DOWNLOADS["turbo-lora"].relative_path.split("/")[-1]
             if not turbo_lora.is_file():
                 raise FileNotFoundError(f"Missing Turbo LoRA: {turbo_lora}")
-            requested = [(turbo_lora, 1.0), *requested]
+            turbo = [(turbo_lora, 1.0)]
+
+        # Keep the Turbo adapter first, matching the old Turbo route's patch order. Both
+        # hybrid stacks start from the never-patched base, so styles enter each exactly once.
+        raw_model = None
+        if not self.preset.turbo:
+            raw_model, raw_details = self._lora_stack(requested, on_change)
+        if self.preset.turbo_lora:
+            turbo_model, turbo_details = self._lora_stack([*turbo, *requested], on_change)
+            self.turbo_model = self._sampling_model(turbo_model, 1.15)
+        if raw_model is not None:
+            self.raw_model = self._sampling_model(raw_model, raw_sampling_shift(self.width, self.height))
+        self.model = self.turbo_model if self.preset.turbo else self.raw_model
+        self.applied_loras = turbo_details if self.preset.turbo else raw_details
+
+    def _lora_stack(self, requested: list[tuple[Path, float]], on_change: Any | None) -> tuple[Any, list[dict[str, Any]]]:
+        runtime = self.runtime
 
         for lora_path, _ in requested:
             if not lora_path.is_file():
@@ -712,8 +812,9 @@ class KreaEngine:
 
         # Fingerprints, not just paths, so editing a LoRA file in place still re-reads it.
         lora_key = tuple((strength, file_fingerprint(path)) for path, strength in requested)
-        if lora_key == self.lora_key:
-            return
+        if lora_key in self.lora_stacks:
+            self.lora_stacks.move_to_end(lora_key)
+            return self.lora_stacks[lora_key]
         if on_change is not None:
             on_change()
 
@@ -738,19 +839,19 @@ class KreaEngine:
                 raise RuntimeError(f"LoRA did not patch any Krea model weights: {lora_path}")
             applied_loras.append({"path": str(lora_path), "strength": strength, "patches": after - before})
 
-        self.model = model
-        self.applied_loras = applied_loras
-        self.lora_key = lora_key
-        if not self.preset.turbo:
-            self._patch_raw_sampling()
+        self.lora_stacks[lora_key] = (model, applied_loras)
+        while len(self.lora_stacks) > 2:
+            self.lora_stacks.popitem(last=False)
+        return model, applied_loras
 
     def set_dimensions(self, width: int, height: int) -> None:
         if (width, height) == (self.width, self.height):
             return
         self.width = width
         self.height = height
-        if not self.preset.turbo:
-            self._patch_raw_sampling()
+        if not self.preset.turbo and hasattr(self, "raw_model"):
+            self.raw_model = self._sampling_model(self.raw_model, raw_sampling_shift(width, height))
+            self.model = self.raw_model
 
     def generate(
         self,
@@ -764,6 +865,8 @@ class KreaEngine:
         enhanced_prompt: str = "",
         progress_callback: Any | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        raw_portion: float | None = None,
+        raw_steps: int | None = None,
     ) -> dict[str, Any]:
         torch = self.runtime.torch
         try:
@@ -780,6 +883,8 @@ class KreaEngine:
                         enhanced_prompt,
                         progress_callback,
                         extra_metadata,
+                        raw_portion,
+                        raw_steps,
                     )
                 except torch.OutOfMemoryError:
                     pass  # Fall through to one retry, below.
@@ -798,6 +903,8 @@ class KreaEngine:
                     enhanced_prompt,
                     progress_callback,
                     extra_metadata,
+                    raw_portion,
+                    raw_steps,
                 )
         except self.runtime.mm.InterruptProcessingException:
             # Comfy's op wrapper raises this from inside whichever forward was running when the
@@ -836,6 +943,51 @@ class KreaEngine:
             cached_bytes -= conditioning_bytes(self.runtime, dropped_positive)
             cached_bytes -= conditioning_bytes(self.runtime, dropped_negative)
 
+    def _sample_two_stage(
+        self, latent: Any, noise: Any, positive: Any, negative: Any, seed: int,
+        steps: int, guidance: float, recipe: dict[str, Any], progress: Any,
+    ) -> tuple[Any, dict[str, Any]]:
+        runtime = self.runtime
+
+        def schedule(model: Any, density: int) -> Any:
+            return runtime.samplers.KSampler(
+                model, steps=density, device=model.load_device, sampler="euler",
+                scheduler="simple", denoise=1.0, model_options=model.model_options,
+            ).sigmas.detach().cpu()
+
+        raw_sigmas, turbo_sigmas = split_sigma_schedules(
+            schedule(self.raw_model, recipe["raw_steps"]), schedule(self.turbo_model, steps), recipe["raw_portion"],
+        )
+        raw_count, turbo_count = len(raw_sigmas) - 1, len(turbo_sigmas) - 1
+        raw_cost = 2 if guidance else 1
+        total_cost = raw_count * raw_cost + turbo_count
+
+        def run(model: Any, sigmas: Any, frame: Any, stage_noise: Any, cfg: float, conditioning: Any, stage: str, offset: int, cost: int, disable_noise: bool) -> Any:
+            runtime.mm.throw_exception_if_processing_interrupted()
+
+            def callback(step: int, _x0: Any, _x: Any, total: int) -> None:
+                progress("sampling", 0.30 + 0.56 * (offset + (step + 1) * cost) / total_cost,
+                         f"Raw {step + 1 if stage == 'Raw' else raw_count}/{raw_count} → Turbo {step + 1 if stage == 'Turbo' else 0}/{turbo_count}")
+
+            progress("sampling", 0.30 + 0.56 * offset / total_cost,
+                     f"Raw {0 if stage == 'Raw' else raw_count}/{raw_count} → Turbo 0/{turbo_count} · Preparing {stage}")
+            return runtime.sample.sample(
+                model=model, noise=stage_noise, steps=len(sigmas) - 1, cfg=cfg,
+                sampler_name="euler", scheduler="simple", positive=positive, negative=conditioning,
+                latent_image=frame, denoise=1.0, disable_noise=disable_noise, force_full_denoise=False,
+                sigmas=sigmas.to(model.load_device), disable_pbar=True, seed=seed, callback=callback,
+            )
+
+        intermediate = run(self.raw_model, raw_sigmas, latent, noise, guidance + 1.0, negative, "Raw", 0, raw_cost, False)
+        samples = run(self.turbo_model, turbo_sigmas, intermediate, runtime.torch.zeros_like(intermediate),
+                      1.0, zero_conditioning(runtime, positive), "Turbo", raw_count * raw_cost, 1, True)
+        return samples, {
+            "raw_executed_steps": raw_count, "turbo_executed_steps": turbo_count,
+            "handoff_sigma": float(raw_sigmas[-1]), "raw_cfg": guidance + 1.0, "turbo_cfg": 1.0,
+            "raw_shift": raw_sampling_shift(self.width, self.height), "turbo_shift": 1.15,
+            "sampler": "euler", "scheduler": "simple",
+        }
+
     def _generate(
         self,
         prompt: str,
@@ -848,12 +1000,19 @@ class KreaEngine:
         enhanced_prompt: str,
         progress_callback: Any | None,
         extra_metadata: dict[str, Any] | None,
+        raw_portion: float | None,
+        raw_steps: int | None,
     ) -> dict[str, Any]:
         runtime = self.runtime
         torch = runtime.torch
         output_dir.mkdir(parents=True, exist_ok=True)
         torch.cuda.reset_peak_memory_stats()
         generation_started = time.perf_counter()
+        recipe = hybrid_settings(self.preset, steps, raw_portion, raw_steps)
+        if self.preset.turbo:
+            if guidance != 0.0:
+                raise ValueError("Turbo guidance is fixed at 0.0")
+            negative_prompt = ""
 
         def progress(stage: str, fraction: float, detail: str) -> None:
             if progress_callback is not None:
@@ -900,27 +1059,36 @@ class KreaEngine:
             fraction = 0.30 + 0.56 * completed / max(total_steps, 1)
             progress("sampling", fraction, f"Sampling step {completed} of {total_steps}")
 
-        samples = runtime.sample.sample(
-            model=self.model,
-            noise=noise,
-            steps=steps,
-            cfg=guidance + 1.0,
-            sampler_name="euler",
-            scheduler="simple",
-            positive=positive,
-            negative=negative,
-            latent_image=latent,
-            denoise=1.0,
-            disable_pbar=True,
-            seed=seed,
-            callback=sampler_progress,
-        )
+        sampling_details = {}
+        if self.preset.two_stage:
+            samples, sampling_details = self._sample_two_stage(
+                latent, noise, positive, negative, seed, steps, guidance, recipe, progress,
+            )
+        else:
+            samples = runtime.sample.sample(
+                model=self.model,
+                noise=noise,
+                steps=steps,
+                cfg=guidance + 1.0,
+                sampler_name="euler",
+                scheduler="simple",
+                positive=positive,
+                negative=negative,
+                latent_image=latent,
+                denoise=1.0,
+                disable_pbar=True,
+                seed=seed,
+                callback=sampler_progress,
+            )
         runtime.synchronize()
         sample_seconds = time.perf_counter() - phase_started
 
         phase_started = time.perf_counter()
         progress("decoding", 0.90, "Decoding pixels")
-        images = self.vae.decode(samples)
+        # Comfy's tiled fallback returns inference tensors and process_output mutates them.
+        # Keep that whole decode inside the context, including the OOM fallback's postprocess.
+        with torch.inference_mode():
+            images = self.vae.decode(samples)
         runtime.synchronize()
         decode_seconds = time.perf_counter() - phase_started
         if images.ndim == 5:
@@ -938,6 +1106,9 @@ class KreaEngine:
             "height": self.height,
             "steps": steps,
             "guidance": guidance,
+            "negative_prompt": negative_prompt,
+            **recipe,
+            **({"sampling": sampling_details} if sampling_details else {}),
             "raw_prompt": raw_prompt,
             "enhanced_prompt": enhanced_prompt,
             "final_prompt": prompt,
@@ -995,12 +1166,12 @@ def validate_generation_values(prompt: str, seed: int, steps: int, guidance: flo
 
 
 def prepare_generation(args: argparse.Namespace, settings: dict[str, Any]) -> tuple[Preset, list[tuple[Path, float]], str, str]:
-    preset = PRESETS[args.preset]
+    preset = PRESETS[migrate_preset(args.preset)]
     resolved_loras = [resolve_lora(settings, spec) for spec in args.lora]
     turbo_lora_name = Path(DOWNLOADS["turbo-lora"].relative_path).stem
     if any(path.stem == turbo_lora_name for path, _, _ in resolved_loras):
         raise ValueError(
-            "The Turbo LoRA is managed by --preset raw-int8-turbo-lora and cannot be passed through --lora"
+            "The Turbo LoRA is managed by the Turbo and Raw → Turbo presets and cannot be passed through --lora"
         )
     loras = [(path, strength) for path, strength, _ in resolved_loras]
     triggers = [trigger for _, _, trigger in resolved_loras if trigger]
@@ -1019,6 +1190,9 @@ def run_generate(args: argparse.Namespace, settings: dict[str, Any]) -> None:
     steps = preset.default_steps if args.steps is None else args.steps
     guidance = preset.default_guidance if args.guidance is None else args.guidance
     validate_generation_values(args.prompt, args.seed, steps, guidance)
+    recipe = hybrid_settings(preset, steps, args.raw_portion, args.raw_steps)
+    if preset.turbo and guidance != 0.0:
+        raise ValueError("Turbo guidance is fixed at 0.0")
     runtime = Runtime(Path(settings["comfy_root"]).expanduser())
     engine = KreaEngine(runtime, settings, preset, loras, args.width, args.height)
     try:
@@ -1030,6 +1204,7 @@ def run_generate(args: argparse.Namespace, settings: dict[str, Any]) -> None:
             steps=steps,
             guidance=guidance,
             negative_prompt=args.negative_prompt,
+            **recipe,
         )
     finally:
         engine.close()
@@ -1142,13 +1317,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate = subparsers.add_parser("generate", help="Generate one image and print its absolute path as JSON")
     generate.add_argument("prompt")
-    generate.add_argument("--preset", choices=PRESETS, default="turbo-int8")
+    generate.add_argument("--preset", type=migrate_preset, choices=PRESETS, default=DEFAULT_PRESET)
     generate.add_argument("--width", type=int, default=1024)
     generate.add_argument("--height", type=int, default=1024)
     generate.add_argument("--seed", type=int, default=0)
     generate.add_argument("--steps", type=int)
     generate.add_argument("--guidance", type=float, help="Krea-native guidance; Turbo defaults to 0.0")
-    generate.add_argument("--negative-prompt", default="", help="Used only by the undistilled Raw preset")
+    generate.add_argument("--negative-prompt", default="", help="Used by Raw and the raw stage of Raw → Turbo")
+    generate.add_argument("--raw-portion", type=float, help="Raw → Turbo handoff percentage (default 8); not a share of runtime")
+    generate.add_argument("--raw-steps", type=int, help="Raw → Turbo raw schedule density (default 52); --steps sets turbo density (default 12)")
     generate.add_argument("--lora", action="append", default=[], metavar="NAME[:STRENGTH]")
     generate.add_argument("--trigger", action="append", default=[], help="Additional exact style trigger to prefix")
     generate.add_argument("--enhance", action=argparse.BooleanOptionalAction, default=None)
@@ -1160,7 +1337,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--presets",
         nargs="+",
         choices=PRESETS,
-        default=["turbo-int8", "raw-int8-turbo-lora"],
+        default=[DEFAULT_PRESET, HYBRID_PRESET],
     )
     benchmark.add_argument("--runs", type=int, default=2)
     benchmark.add_argument("--width", type=int, default=1024)

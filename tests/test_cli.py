@@ -236,12 +236,12 @@ class EngineTests(unittest.TestCase):
 
     def test_unchanged_lora_stack_does_no_work(self):
         engine = object.__new__(offcut_cli.KreaEngine)
-        engine.preset = offcut_cli.PRESETS["turbo-int8"]
-        engine.lora_key = ()
+        cached = (object(), [])
+        engine.lora_stacks = OrderedDict({(): cached})
         engine.runtime = None  # Any actual reload work would raise on this.
         changes = []
 
-        engine.set_loras([], on_change=lambda: changes.append(1))
+        self.assertIs(engine._lora_stack([], lambda: changes.append(1)), cached)
 
         self.assertEqual(changes, [])
 
@@ -249,8 +249,10 @@ class EngineTests(unittest.TestCase):
         base = SimpleNamespace(name="base", patches={})
         patched = SimpleNamespace(name="patched", patches={"weight": ["delta"]})
         engine = object.__new__(offcut_cli.KreaEngine)
-        engine.preset = offcut_cli.PRESETS["turbo-int8"]
-        engine.lora_key = ()
+        engine.preset = offcut_cli.PRESETS["raw-int8"]
+        engine.width = engine.height = 1024
+        engine.lora_stacks = OrderedDict()
+        engine._sampling_model = lambda model, shift: model
         engine.base_model = base
         engine.model = base
         engine.applied_loras = []
@@ -282,12 +284,13 @@ class EngineTests(unittest.TestCase):
         engine.width = 1024
         engine.height = 1024
         engine.preset = offcut_cli.PRESETS["raw-int8"]
-        engine._patch_raw_sampling = MagicMock()
+        raw = engine.raw_model = object()
+        engine._sampling_model = MagicMock()
 
         engine.set_dimensions(1216, 832)
 
         self.assertEqual((engine.width, engine.height), (1216, 832))
-        engine._patch_raw_sampling.assert_called_once_with()
+        engine._sampling_model.assert_called_once_with(raw, offcut_cli.raw_sampling_shift(1216, 832))
 
 
 class ConditioningCacheTests(unittest.TestCase):

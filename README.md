@@ -72,11 +72,11 @@ export OFFCUT_PYTHON="$OFFCUT_COMFY_ROOT/.venv/bin/python"
 
 </details>
 
-**1. Install the app dependency and download the model.**
+**1. Install the app dependency and download the raw model and Turbo LoRA.**
 
 ```bash
 "${OFFCUT_PYTHON:-../ComfyUI/.venv/bin/python}" -m pip install -r requirements.txt
-./offcut-cli download turbo-int8
+./offcut-cli download raw-int8 turbo-lora
 ```
 
 Download these separately into your ComfyUI folder:
@@ -103,16 +103,44 @@ Open **http://127.0.0.1:7862**. The first launch installs the Node dependencies 
 
 Generation stays on your GPU. Optional chat and enhancement send prompts and supplied images to your chosen provider. The app only listens on your own computer.
 
+### Generation routes
+
+The raw model and Turbo LoRA support all three routes:
+
+| Route | How it works |
+| --- | --- |
+| **Turbo** | Fast default: 8 steps with the Turbo LoRA. |
+| **Raw → Turbo** | Starts with Raw, then finishes with Turbo. At the default 1024×1024 size, 4 Raw steps → 11 Turbo steps. |
+| **Raw** | A full 52-step Raw pass, with adjustable guidance and negative prompting. |
+
+Raw → Turbo's Advanced controls let you choose **Raw steps**, with a live readout such as
+**4 Raw steps → 11 Turbo steps**. The Turbo count updates automatically for the current frame size.
+The collapsed **Sampling setup** section holds the full-pass counts (Raw 52 / Turbo 12); leave
+those at their defaults for normal use. Guidance and negative prompts affect only the Raw stage;
+style LoRAs apply to both. More Raw steps takes longer and can change the composition.
+
+Chat understands the same controls: ask it to “try 9 Raw steps” or change the settings without
+generating. Cover recipes also use the same step controls.
+
 <details>
-<summary>Other models and command-line use</summary>
+<summary>Command-line use</summary>
 
 ```bash
-./offcut-cli download raw-int8 turbo-lora
-./offcut-cli generate "A red fox in fresh snow" --preset turbo-int8 --seed 42
+./offcut-cli generate "A red fox in fresh snow" --seed 42
+./offcut-cli generate "A red fox in fresh snow" --preset raw-int8-to-turbo --raw-portion 8 --raw-steps 52 --steps 12 --guidance 3 --seed 42
+./offcut-cli generate "A red fox in fresh snow" --preset raw-int8 --seed 42
 ./offcut-cli --help
 ```
 
-Presets are `turbo-int8`, `raw-int8-turbo-lora`, and `raw-int8`. Only Raw uses negative prompts and adjustable guidance; Turbo keeps guidance at zero. The CLI doesn't need Node.
+CLI presets are `raw-int8-turbo-lora` (Turbo, the default), `raw-int8-to-turbo` (Raw → Turbo),
+and `raw-int8` (Raw).
+
+For Raw → Turbo, `--raw-portion` chooses the percentage handoff on the Raw schedule,
+`--raw-steps` sets the Raw full-pass count, and `--steps` sets the Turbo full-pass count.
+Only the beginning of Raw and the remaining part of Turbo execute. Guidance is CFG minus one;
+the hybrid default of `--guidance 3` means CFG 4 during the Raw stage. Turbo finishes at CFG 1.
+
+The CLI doesn't need Node.
 
 </details>
 

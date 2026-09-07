@@ -40,16 +40,16 @@ from offcut_store import DEFAULT_LORA_STRENGTH, Store
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 DATABASE_PATH = Path(__file__).resolve().parent / "data" / "offcut.sqlite3"
 PRESET_DETAILS = {
-    "turbo-int8": {
-        "label": "Turbo INT8",
-        "description": "Native Turbo checkpoint. Fastest default path.",
-    },
     "raw-int8-turbo-lora": {
-        "label": "Raw + Turbo LoRA",
-        "description": "Raw checkpoint transformed with the official rank-64 Turbo adapter.",
+        "label": "Turbo",
+        "description": "8 steps with the official Turbo adapter on the shared raw checkpoint.",
+    },
+    "raw-int8-to-turbo": {
+        "label": "Raw → Turbo",
+        "description": "Start with raw sampling, then finish with Turbo. Default 8% raw; adjustable in Advanced.",
     },
     "raw-int8": {
-        "label": "Raw INT8",
+        "label": "Raw",
         "description": "Undistilled model. 52 steps with classifier-free guidance.",
     },
 }
@@ -126,10 +126,13 @@ CHAT_SETTING_KEYS = {
     "height",
     "steps",
     "guidance",
+    "raw_portion",
+    "raw_steps",
     "seed",
     "negative_prompt",
     "loras",
 }
+CHAT_SAMPLING_KEYS = {"raw_start_steps", "raw_full_pass_steps", "turbo_full_pass_steps"}
 CHAT_SYSTEM_PROMPT = """Act as an app-local visual creative director for this Offcut board.
 Be concise in chat replies, while explaining useful visual reasoning and tradeoffs.
 Krea 2 rewards natural-language image prompts over keyword lists. Any prompt you write or revise should be one
@@ -141,6 +144,7 @@ detail. Krea 2's own reference prompts run from 10 to 180 words. Honor the mediu
 invent subjects, props, or text the request does not imply, and wrap any words that must be rendered in the image
 in "quotes". Polish an already-detailed prompt rather than expanding it. Krea 2 renders up to 2048 pixels per side.
 Inspect current state through the provided tools before describing it or making decisions; never claim that state changed or generation succeeded without a successful tool result.
+Use the UI's sampling language: Turbo, Raw → Turbo, and Raw. On Raw → Turbo, "Raw steps" means actual steps before the handoff: set raw_start_steps, then read sampling_plan in the tool receipt (for example, 4 Raw steps → 11 Turbo steps). The server computes Turbo's remaining steps; do not calculate a percentage yourself. Raw guidance and the negative prompt affect only the raw opening; Turbo finishes at fixed CFG 1. More Raw can explore different compositions at a speed cost, not guarantee better quality or prompt adherence. Adjust route or Raw steps when relevant to the request, not as a ritual response to every missed detail. Preserve the current Sampling setup during ordinary iteration (defaults Raw 52 / Turbo 12), using raw_full_pass_steps and turbo_full_pass_steps only for deliberate sampling experiments. Historical recipe fields raw_steps and raw_portion describe full-pass density and percentage, not the current UI step count. A settings edit does not generate an image; honor prompt-only and no-generation requests.
 For a small correction, use edit_prompt with an exact match from the current workspace. Preserve effective user wording. When revisions accumulate, consolidate with set_prompt: preserve the creative brief and remove redundant descriptions rather than adding another clause for every failed sample.
 LoRAs may have user-provided summaries and prompting notes. Read inspect_lora before writing a prompt for an active LoRA when notes are available. The user may describe trigger usage, useful strengths, caption patterns, examples, or limitations. These are optional suggestions, not verified training facts or a required format. Never invent missing training details or bend the user's request to fit a note. Configured trigger phrases are prepended automatically, so never write one into the prompt.
 Saved styles are a library of reusable art-style descriptions. Read them with list_styles and inspect_style. A style the board has active is already prefixed onto the prompt at generation time, so never restate it; to use an inactive one, write its wording into the prompt yourself and adapt it to the shot. You cannot turn styles on or off, which is the user's control. When the user asks to change a style they already have, edit it in place with update_style rather than saving a near-duplicate, and never edit a style unless they asked.
@@ -306,7 +310,7 @@ class AppState:
             prompt = prompt_value.strip()
             if not prompt:
                 raise ValueError("Prompt is required")
-            preset_name = str(payload.get("preset", "turbo-int8"))
+            preset_name = offcut_cli.migrate_preset(str(payload.get("preset", offcut_cli.DEFAULT_PRESET)))
             if preset_name not in offcut_cli.PRESETS:
                 raise ValueError(f"Unknown preset: {preset_name}")
             width = parse_integer(payload.get("width", 1024), "width")
@@ -385,6 +389,7 @@ class AppState:
             if not preset_uses_negative_prompt(preset_name):
                 negative_prompt = ""
             offcut_cli.validate_generation_values(prompt, seed, steps, guidance)
+            recipe = offcut_cli.hybrid_settings(preset, steps, payload.get("raw_portion"), payload.get("raw_steps"))
 
             comfy_root = Path(settings["comfy_root"]).expanduser().resolve()
             if self.runtime_root is not None and self.runtime_root != comfy_root:
@@ -433,6 +438,10 @@ class AppState:
             # because enhancement writes the prompt this hashes, and before the runtime starts so
             # a repeat costs neither a model load nor a LoRA swap. A random seed never reaches
             # this twice, which is what keeps the check from quietly capping a batch.
+            model_fingerprints = (checkpoint_fingerprint, text_encoder_fingerprint, vae_fingerprint)
+            if preset.turbo_lora:
+                turbo_path = Path(settings["model_dir"]).expanduser() / offcut_cli.DOWNLOADS["turbo-lora"].relative_path
+                model_fingerprints += (file_fingerprint(turbo_path),)
             run_key = generation_run_key(
                 preset.name,
                 final_prompt,
@@ -443,7 +452,8 @@ class AppState:
                 steps,
                 guidance,
                 loras,
-                (checkpoint_fingerprint, text_encoder_fingerprint, vae_fingerprint),
+                model_fingerprints,
+                recipe,
             )
             reusable = None if force else STORE.find_run(board_id, run_key, kind)
             # A row whose file has been moved or deleted out from under the database has to fall
@@ -473,7 +483,6 @@ class AppState:
             # checkpoint, so engine.set_loras swaps them in place rather than forcing a reload
             # of the checkpoint, text encoder, and VAE.
             engine_key = (
-                preset.name,
                 checkpoint_fingerprint,
                 text_encoder_fingerprint,
                 vae_fingerprint,
@@ -495,6 +504,8 @@ class AppState:
                 self.engine_key = engine_key
 
             self.raise_if_cancelled()
+            self.engine.settings = settings
+            self.engine.set_preset(preset)
             self.engine.set_dimensions(width, height)
             self.engine.set_loras(
                 loras,
@@ -509,6 +520,7 @@ class AppState:
                 steps=steps,
                 guidance=guidance,
                 negative_prompt=negative_prompt,
+                **recipe,
                 enhanced_prompt=enhanced_prompt,
                 progress_callback=self.set_progress,
                 extra_metadata={
@@ -526,6 +538,7 @@ class AppState:
                 result,
                 {
                     **payload,
+                    **recipe,
                     "prompt": prompt,
                     "preset": preset_name,
                     "width": width,
@@ -620,6 +633,7 @@ def generation_run_key(
     guidance: float,
     loras: list[tuple[Path, float]],
     model_fingerprints: tuple[Any, ...],
+    sampling_recipe: dict[str, Any] | None = None,
 ) -> str:
     payload = json.dumps(
         [
@@ -633,6 +647,7 @@ def generation_run_key(
             guidance,
             [[file_fingerprint(path), strength] for path, strength in loras],
             model_fingerprints,
+            sampling_recipe or {},
         ],
         separators=(",", ":"),
     )
@@ -924,6 +939,7 @@ def generate_library_cover(target_kind: str, target: str, cancel_event: threadin
         "height": int(recipe["height"]),
         "steps": int(recipe["steps"]),
         "guidance": float(recipe["guidance"]),
+        **offcut_cli.hybrid_settings(offcut_cli.PRESETS[recipe["preset"]], int(recipe["steps"]), recipe.get("raw_portion"), recipe.get("raw_steps")),
         "seed": str(int(recipe["seed"])),
         "enhance": False,
         "loras": [],
@@ -1093,8 +1109,8 @@ def skill_invocation_text(skill: dict[str, str], instructions: str = "") -> str:
 
 
 # Distilled routes sample without classifier-free guidance, so KreaEngine.generate substitutes
-# zero conditioning for the negative branch and never encodes the text. Only the undistilled raw
-# route actually consumes a negative prompt.
+# zero conditioning for the negative branch and never encodes the text. Raw → Turbo consumes
+# the negative only during its raw opening.
 def preset_uses_negative_prompt(preset_name: Any) -> bool:
     preset = offcut_cli.PRESETS.get(preset_name if isinstance(preset_name, str) else "")
     return preset is not None and not preset.turbo
@@ -1105,8 +1121,8 @@ def preset_uses_negative_prompt(preset_name: Any) -> bool:
 # switches on real classifier-free guidance against the zero conditioning that stands in for the
 # negative branch. That is not a weaker or stronger version of the intended image, it is an
 # unconditioned direction the distilled model was never trained to be pushed away from, so it
-# reliably wrecks the output while also doubling the work. Only the undistilled raw route has a
-# meaningful guidance dial.
+# reliably wrecks the output while also doubling the work. Raw → Turbo's guidance belongs
+# exclusively to its raw opening; its turbo finish stays at CFG 1.
 def preset_uses_guidance(preset_name: Any) -> bool:
     preset = offcut_cli.PRESETS.get(preset_name if isinstance(preset_name, str) else "")
     return preset is not None and not preset.turbo
@@ -1116,7 +1132,7 @@ def preset_guidance_error(preset_name: Any) -> str:
     return (
         f"The {preset_name} route is distilled and samples without classifier-free guidance, so its "
         "guidance is fixed at 0.0 and any other value degrades the image rather than steering it. "
-        "Only the raw-int8 route has a usable guidance dial; switch to it if you need one."
+        "Use raw-int8 or the raw stage of raw-int8-to-turbo for guidance."
     )
 
 
@@ -1267,7 +1283,7 @@ def image_has_usable_context(image: dict[str, Any]) -> bool:
 
 
 def curated_image(image: dict[str, Any]) -> dict[str, Any]:
-    return {
+    result = {
         "id": image["id"],
         "image_id": image["id"],
         "image_url": f"/api/image-files/{quote(image['id'])}",
@@ -1282,12 +1298,23 @@ def curated_image(image: dict[str, Any]) -> dict[str, Any]:
         "steps": image.get("steps"),
         "guidance": image.get("guidance"),
         "negative_prompt": image.get("negative_prompt", ""),
+        **{key: image.get("metadata", {})[key] for key in ("raw_portion", "raw_steps", "sampling") if key in image.get("metadata", {})},
         "loras": [
             {"name": item.get("name", ""), "strength": item.get("strength", 1.0)}
             for item in image.get("loras", [])
             if isinstance(item, dict)
         ],
     }
+    if image.get("preset") == offcut_cli.HYBRID_PRESET:
+        view = agent_workspace_settings({**image, **{key: image.get("metadata", {}).get(key) for key in ("raw_steps", "raw_portion")}})
+        # Historical frames report the counts actually recorded by their sampler. The preview
+        # is only a fallback for a frame predating those fields.
+        sampling = image.get("metadata", {}).get("sampling", {})
+        if "raw_executed_steps" in sampling and "turbo_executed_steps" in sampling:
+            view["sampling_plan"] = sampling_plan_receipt(sampling["raw_executed_steps"], sampling["turbo_executed_steps"])
+        result["sampling_plan"] = view["sampling_plan"]
+        result["sampling_setup"] = view["sampling_setup"]
+    return result
 
 
 def collect_image_refs(value: Any, found: set[str] | None = None) -> set[str]:
@@ -1734,6 +1761,8 @@ def curated_workspace_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "height",
         "steps",
         "guidance",
+        "raw_portion",
+        "raw_steps",
         "seed",
         "negative_prompt",
         "loras",
@@ -1746,6 +1775,43 @@ def curated_workspace_settings(settings: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy({key: settings[key] for key in keys if key in settings})
     if result.get("seed") is not None:
         result["seed"] = str(result["seed"])
+    return result
+
+
+def sampling_plan_receipt(raw: int, turbo: int) -> dict[str, Any]:
+    return {
+        "raw_start_steps": raw, "turbo_finish_steps": turbo,
+        "label": f"{raw} Raw {'step' if raw == 1 else 'steps'} → {turbo} Turbo {'step' if turbo == 1 else 'steps'}",
+    }
+
+
+def agent_workspace_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Name hybrid controls as the UI does, without persisting a derived step plan.
+
+    Context, browser patches, and exact restoration keep the canonical percentage recipe.
+    Only the model's receipt uses the convenient executed-count view.
+    """
+    result = curated_workspace_settings(settings)
+    if result.get("preset") != offcut_cli.HYBRID_PRESET:
+        return result
+    turbo_density = result.pop("steps", None)
+    portion = result.pop("raw_portion", None)
+    raw_density = result.pop("raw_steps", None)
+    try:
+        turbo_density = 12 if turbo_density in (None, "") else parse_integer(turbo_density, "steps")
+        recipe = offcut_cli.hybrid_settings(offcut_cli.PRESETS[offcut_cli.HYBRID_PRESET], turbo_density, portion, raw_density)
+        plan = offcut_cli.hybrid_step_plan(
+            parse_integer(result.get("width", 1024), "width"), parse_integer(result.get("height", 1024), "height"),
+            recipe["raw_portion"], recipe["raw_steps"], turbo_density,
+        )
+        result["raw_start_steps"] = plan["raw"]
+        result["sampling_plan"] = sampling_plan_receipt(plan["raw"], plan["turbo"])
+        raw_density = recipe["raw_steps"]
+    except (ValueError, TypeError, OverflowError) as exc:
+        # Browser drafts may temporarily contain an invalid hand-typed value. Let the agent
+        # inspect and repair that draft rather than fail the entire workspace read.
+        result["sampling_plan"] = {"error": str(exc)}
+    result["sampling_setup"] = {"raw_full_pass_steps": raw_density, "turbo_full_pass_steps": turbo_density}
     return result
 
 
@@ -2117,13 +2183,37 @@ def persist_chat_settings(context: dict[str, Any], settings: dict[str, Any]) -> 
 
 
 def validate_chat_setting_patch(patch: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    unknown = set(patch) - CHAT_SETTING_KEYS
+    unknown = set(patch) - CHAT_SETTING_KEYS - CHAT_SAMPLING_KEYS
     if unknown:
         raise ValueError(f"Unsupported generation setting: {sorted(unknown)[0]}")
+    patch = copy.deepcopy(patch)
+    convenience_keys = set(patch) & CHAT_SAMPLING_KEYS
+    resolved_route = offcut_cli.migrate_preset(patch.get("preset", current.get("preset", offcut_cli.DEFAULT_PRESET)))
+    if convenience_keys and resolved_route != offcut_cli.HYBRID_PRESET:
+        raise ValueError("Raw start steps and full-pass sampling setup apply only to Raw → Turbo")
+    for alias, canonical in (("raw_full_pass_steps", "raw_steps"), ("turbo_full_pass_steps", "steps")):
+        if alias in patch:
+            if canonical in patch:
+                raise ValueError(f"Supply {alias} or {canonical}, not both")
+            patch[canonical] = patch.pop(alias)
+    has_start_steps = "raw_start_steps" in patch
+    start_steps = patch.pop("raw_start_steps", None)
+    if has_start_steps:
+        if "raw_portion" in patch:
+            raise ValueError("Supply raw_start_steps or raw_portion, not both")
+        # An explicit count replaces a stranded percentage, including an invalid browser draft.
+        patch["raw_portion"] = None
     candidate = copy.deepcopy(current)
     candidate.update(copy.deepcopy(patch))
-    if "preset" in patch and patch["preset"] not in offcut_cli.PRESETS:
+    if isinstance(candidate.get("preset"), str):
+        candidate["preset"] = offcut_cli.migrate_preset(candidate["preset"])
+    if "preset" in patch and candidate["preset"] not in offcut_cli.PRESETS:
         raise ValueError(f"Unknown preset: {patch['preset']}")
+    route_changed = "preset" in patch and candidate["preset"] != offcut_cli.migrate_preset(current.get("preset", offcut_cli.DEFAULT_PRESET))
+    if route_changed:
+        for key in ("steps", "guidance"):
+            if key not in patch:
+                candidate[key] = None
     if "width" in patch or "height" in patch:
         width = parse_integer(candidate.get("width", 1024), "width")
         height = parse_integer(candidate.get("height", 1024), "height")
@@ -2154,18 +2244,18 @@ def validate_chat_setting_patch(patch: dict[str, Any], current: dict[str, Any]) 
     # Asking for a negative prompt on a distilled route is refused rather than silently dropped at
     # sampling time. A route change that strands an existing one clears it instead of failing: the
     # route the caller asked for is the request, and the negative is dead weight on it either way.
-    if not preset_uses_negative_prompt(candidate.get("preset", "turbo-int8")):
+    if not preset_uses_negative_prompt(candidate.get("preset", offcut_cli.DEFAULT_PRESET)):
         if str(patch.get("negative_prompt") or "").strip():
             raise ValueError(
-                f"The {candidate.get('preset', 'turbo-int8')} route samples without classifier-free guidance "
-                "and ignores a negative prompt. Only the raw-int8 route uses one."
+                f"The {candidate.get('preset', offcut_cli.DEFAULT_PRESET)} route samples without classifier-free guidance "
+                "and ignores a negative prompt. Use Raw or the raw stage of Raw → Turbo."
             )
         candidate["negative_prompt"] = ""
     # Guidance follows the same rule for the same reason. Raising on an explicit change is the
     # point: a distilled route's guidance is not a dial that happens to be at zero, and an agent
     # nudging it "to improve the image" is the exact failure this refuses. A route change that
     # strands a raw-route value resets it instead of failing, matching the negative prompt above.
-    resolved_preset = candidate.get("preset", "turbo-int8")
+    resolved_preset = candidate.get("preset", offcut_cli.DEFAULT_PRESET)
     if not preset_uses_guidance(resolved_preset):
         if "guidance" in patch and patch["guidance"] is not None and float(patch["guidance"]) != 0.0:
             raise ValueError(preset_guidance_error(resolved_preset))
@@ -2174,6 +2264,31 @@ def validate_chat_setting_patch(patch: dict[str, Any], current: dict[str, Any]) 
         distilled = offcut_cli.PRESETS.get(resolved_preset)
         if candidate.get("guidance") is not None:
             candidate["guidance"] = distilled.default_guidance if distilled else 0.0
+    if resolved_preset == offcut_cli.HYBRID_PRESET:
+        preset = offcut_cli.PRESETS[resolved_preset]
+        recipe = offcut_cli.hybrid_settings(preset, candidate.get("steps") or preset.default_steps,
+                                           candidate.get("raw_portion"), candidate.get("raw_steps"))
+        if has_start_steps and start_steps is not None:
+            if isinstance(start_steps, bool) or not isinstance(start_steps, int) or not 1 <= start_steps < recipe["raw_steps"]:
+                raise ValueError(f"raw_start_steps must be an integer from 1 to {recipe['raw_steps'] - 1} for this sampling setup")
+            recipe["raw_portion"] = start_steps / recipe["raw_steps"] * 100
+        elif not has_start_steps and "raw_steps" in patch and "raw_portion" not in patch and current.get("preset") == resolved_preset:
+            # Match the UI: changing raw full-pass density preserves the chosen executed count
+            # where it fits. Exact restoration supplies a percentage and bypasses this mapping.
+            try:
+                previous = offcut_cli.hybrid_settings(preset, preset.default_steps, current.get("raw_portion"), current.get("raw_steps"))
+            except ValueError:
+                previous = None  # An invalid draft has no valid count to preserve.
+            if previous is not None:
+                count = max(1, min(previous["raw_steps"] - 1, round(previous["raw_steps"] * previous["raw_portion"] / 100)))
+                count = min(count, recipe["raw_steps"] - 1)
+                recipe["raw_portion"] = count / recipe["raw_steps"] * 100
+        candidate.update(recipe)
+    else:
+        if any(patch.get(key) is not None for key in ("raw_portion", "raw_steps")):
+            raise ValueError("Raw portion and raw schedule steps apply only to Raw → Turbo")
+        candidate.pop("raw_portion", None)
+        candidate.pop("raw_steps", None)
     if "loras" in patch:
         loras = patch["loras"]
         if not isinstance(loras, list) or len(loras) > 4:
@@ -2338,6 +2453,8 @@ def restore_chat_image(context: dict[str, Any], image_id: Any, emit: Any) -> dic
     if source.get("kind") == "reference" or not source.get("final_prompt"):
         raise ValueError("This reference has no generation recipe to restore")
     patch = {key: source[key] for key in CHAT_SETTING_KEYS if key in source}
+    if source.get("preset") == offcut_cli.HYBRID_PRESET:
+        patch.update({key: source.get("metadata", {}).get(key) for key in ("raw_portion", "raw_steps")})
     patch["seed"] = str(source["seed"])
     settings = validate_chat_setting_patch(patch, context["settings"])
     # Bake the exact rendered wording, including old style text, rather than depend on a
@@ -2345,8 +2462,11 @@ def restore_chat_image(context: dict[str, Any], image_id: Any, emit: Any) -> dic
     settings.update(prompt=source["final_prompt"], styles=[], triggers=[], enhance=False)
     board = persist_chat_settings(context, settings)
     emit({"type": "workspace_patch", "settings": context["settings"], "revision": board["settings_revision"]})
-    return {"settings": context["settings"], "source_image_id": image_id, "generation_performed": False,
-            "note": "Restored the exact seed, rendered wording, route, dimensions, steps, guidance and LoRAs. Historical style text is baked into the prompt; style toggles and enhancement are cleared to avoid applying it twice. No image was generated."}
+    migrated = source.get("preset") == "turbo-int8"
+    return {"settings": agent_workspace_settings(context["settings"]), "source_image_id": image_id, "generation_performed": False,
+            "route_migrated": migrated,
+            "note": ("The retired standalone Turbo route was replaced by raw + Turbo LoRA; this is not an exact reproduction of its weights. " if migrated else "Restored the stored sampling recipe. ")
+            + "Restored the exact seed and rendered wording. Historical style text is baked into the prompt; style toggles and enhancement are cleared to avoid applying it twice. No image was generated."}
 
 
 def execute_chat_tool(
@@ -2390,7 +2510,7 @@ def execute_chat_tool(
             context["revision"] = board["settings_revision"]
             return {
                 "board": {"id": board["id"], "name": board["name"], "description": board["description"]},
-                "settings": context["settings"],
+                "settings": agent_workspace_settings(context["settings"]),
                 "selected_image_id": context["workspace_selected_image_id"],
                 "creative_brief": context["chat"].get("creative_brief", {}),
                 "recent_attempts": compact_attempts(STORE.list_chat_attempts(context["chat"]["id"])),
@@ -2630,21 +2750,26 @@ def execute_chat_tool(
             return {
                 "generation_performed": False,
                 "prompt": prompt,
-                "settings": context["settings"],
+                "settings": agent_workspace_settings(context["settings"]),
                 "prompt_change": prompt_change,
             }
         if name == "update_generation_settings":
+            if set(args) & {"raw_steps", "raw_portion"}:
+                raise ValueError("Use raw_start_steps for the UI's Raw steps, or raw_full_pass_steps for advanced Sampling setup")
+            target_preset = args.get("preset", context["settings"].get("preset", offcut_cli.DEFAULT_PRESET))
+            if target_preset == offcut_cli.HYBRID_PRESET and "steps" in args:
+                raise ValueError("On Raw → Turbo, use raw_start_steps for the UI's Raw steps or turbo_full_pass_steps for advanced Sampling setup")
             previous_negative = str(context["settings"].get("negative_prompt") or "")
             settings = validate_chat_setting_patch(args, context["settings"])
             board = persist_chat_settings(context, settings)
             emit({"type": "workspace_patch", "settings": context["settings"], "revision": board["settings_revision"]})
-            result = {"settings": context["settings"]}
+            result = {"settings": agent_workspace_settings(context["settings"]), "generation_performed": False}
             # The clear is reported rather than left for the model to notice in the echoed
             # settings, so it never keeps reasoning about a negative prompt that is now gone.
             if previous_negative.strip() and not str(context["settings"].get("negative_prompt") or "").strip():
                 result["notes"] = [
                     f"The existing negative prompt was cleared because the {context['settings'].get('preset')} "
-                    "route ignores one. Only the raw-int8 route uses a negative prompt."
+                    "route ignores one. Raw and the raw stage of Raw → Turbo use a negative prompt."
                 ]
             return result
         if name == "set_aspect_ratio":
@@ -2652,7 +2777,7 @@ def execute_chat_tool(
             settings = validate_chat_setting_patch({"width": width, "height": height}, context["settings"])
             board = persist_chat_settings(context, settings)
             emit({"type": "workspace_patch", "settings": context["settings"], "revision": board["settings_revision"]})
-            return {"width": width, "height": height, "settings": context["settings"]}
+            return {"width": width, "height": height, "settings": agent_workspace_settings(context["settings"]), "generation_performed": False}
         if name == "generate_image":
             if not isinstance(args.get("fresh_seed", False), bool):
                 raise ValueError("fresh_seed must be a boolean")
@@ -2692,7 +2817,8 @@ def execute_chat_tool(
                 raise failure[0]
             image = curated_image(result["image"])
             attempt_id = STORE.record_chat_attempt(context["chat"]["id"], image["id"],
-                {**generation_payload, "seed": image["seed"], "steps": image["steps"], "guidance": image["guidance"]},
+                {**generation_payload, "preset": image["preset"], "seed": image["seed"], "steps": image["steps"], "guidance": image["guidance"],
+                 **{key: image[key] for key in ("raw_portion", "raw_steps", "sampling") if key in image}},
                 change_note, result.get("reused", False))
             generated_source = STORE.get_image(result["image"]["id"])
             board = STORE.get_board(board_id)
@@ -2792,6 +2918,8 @@ def public_cover_recipe(settings: dict[str, Any]) -> dict[str, Any]:
         "height": int(cover["height"]),
         "steps": int(cover["steps"]),
         "guidance": float(cover["guidance"]),
+        "raw_portion": cover.get("raw_portion", 8.0),
+        "raw_steps": cover.get("raw_steps", 52),
         "lora_strength": float(cover["lora_strength"]),
         "default_prompt": offcut_cli.DEFAULT_COVER_PROMPT,
     }
@@ -2805,9 +2933,10 @@ def update_cover_recipe(cover: dict[str, Any], payload: dict[str, Any]) -> None:
     if "seed" in payload:
         cover["seed"] = parse_integer(payload["seed"], "seed")
     if "preset" in payload:
-        if payload["preset"] not in offcut_cli.PRESETS:
+        preset_name = offcut_cli.migrate_preset(payload["preset"])
+        if preset_name not in offcut_cli.PRESETS:
             raise ValueError(f"Unknown preset: {payload['preset']}")
-        cover["preset"] = payload["preset"]
+        cover["preset"] = preset_name
     if "width" in payload or "height" in payload:
         width = parse_integer(payload.get("width", cover["width"]), "width")
         height = parse_integer(payload.get("height", cover["height"]), "height")
@@ -2832,6 +2961,10 @@ def update_cover_recipe(cover: dict[str, Any], payload: dict[str, Any]) -> None:
     if not preset_uses_guidance(cover["preset"]) and cover["guidance"] != offcut_cli.PRESETS[cover["preset"]].default_guidance:
         raise ValueError(preset_guidance_error(cover["preset"]))
     offcut_cli.validate_generation_values(cover["prompt"], cover["seed"], cover["steps"], cover["guidance"])
+    for key in ("raw_portion", "raw_steps"):
+        if key in payload:
+            cover[key] = payload[key]
+    cover.update(offcut_cli.hybrid_settings(offcut_cli.PRESETS[cover["preset"]], cover["steps"], cover.get("raw_portion"), cover.get("raw_steps")))
 
 
 def validate_endpoint(value: str) -> str:
@@ -3173,7 +3306,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 models = model_status(settings)
                 missing = [name for name, value in models.items() if not value["present"] or not value["size_ok"]]
                 preset_requirements = {
-                    "turbo-int8": ("turbo-int8", "text-encoder", "vae"),
+                    "raw-int8-to-turbo": ("raw-int8", "turbo-lora", "text-encoder", "vae"),
                     "raw-int8-turbo-lora": ("raw-int8", "turbo-lora", "text-encoder", "vae"),
                     "raw-int8": ("raw-int8", "text-encoder", "vae"),
                 }
@@ -3187,7 +3320,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "ready": any(preset_ready.values()),
                         "preset_ready": preset_ready,
                         "missing": missing,
-                        "active_engine": STATE.engine_key[0] if STATE.engine_key else None,
+                        "active_engine": STATE.engine.preset.name if STATE.engine is not None else None,
                         "runtime_initialized": STATE.runtime is not None,
                         "runtime_initializing": STATE.runtime_initializing,
                         "presets": PRESET_DETAILS,

@@ -68,7 +68,7 @@ const definitions = Object.freeze({
   },
   get_workspace_state: {
     label: "Get workspace state",
-    description: "Read the current prompt, generation settings, active LoRAs, board, and selection.",
+    description: "Read the current prompt, generation settings, active LoRAs, board, and selection. Raw → Turbo includes the same executed-step plan shown in the UI, plus the separate full-pass sampling setup.",
     parameters: Type.Object({}, { additionalProperties: false }),
   },
   get_selected_image: {
@@ -110,26 +110,29 @@ const definitions = Object.freeze({
   update_generation_settings: {
     label: "Update generation settings",
     description:
-      "Update only the supplied generation settings in the workspace. Switching to a route that ignores negative prompts clears any existing one.",
+      "Update generation settings without generating. For the UI's Raw steps control, use raw_start_steps: the server calculates the handoff and reports the resulting Raw → Turbo step plan. Route changes reset steps and guidance to AUTO unless supplied, and clear an unusable negative. Turbo is fast; more Raw can change composition at a speed cost, not guarantee better quality or adherence. Preserve the current full-pass settings (defaults Raw 52 / Turbo 12) during ordinary iteration; change them for deliberate sampling experiments.",
     parameters: Type.Object(
       {
-        preset: Type.Optional(Type.Union([Type.Literal("turbo-int8"), Type.Literal("raw-int8"), Type.Literal("raw-int8-turbo-lora")])),
+        preset: Type.Optional(Type.Union([Type.Literal("raw-int8-to-turbo"), Type.Literal("raw-int8"), Type.Literal("raw-int8-turbo-lora")])),
         width: Type.Optional(Type.Integer({ minimum: 256, maximum: 2048, multipleOf: 16 })),
         height: Type.Optional(Type.Integer({ minimum: 256, maximum: 2048, multipleOf: 16 })),
-        steps: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 100 }), Type.Null()], { description: "null restores the route default (AUTO)." })),
+        steps: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 100 }), Type.Null()], { description: "Total steps for Turbo or Raw; null restores AUTO (Turbo 8, Raw 52). For Raw → Turbo use raw_start_steps to change the visible Raw steps control, or turbo_full_pass_steps for an advanced sampling experiment." })),
+        raw_start_steps: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 99 }), Type.Null()], { description: "Raw → Turbo only: actual Raw steps executed before Turbo takes over, matching the UI stepper. For 'try 9 Raw steps', set this to 9. Must be less than raw_full_pass_steps (default 52, so normally 1–51). Turbo's executed count is calculated automatically. null restores the default 8% opening (4 Raw steps at the default setup)." })),
+        raw_full_pass_steps: Type.Optional(Type.Union([Type.Integer({ minimum: 2, maximum: 100 }), Type.Null()], { description: "Advanced Sampling setup for Raw → Turbo. A complete Raw pass would use this count; default 52. This is NOT the UI's Raw steps. Changing it preserves the chosen Raw count where it fits. null restores 52. Leave unchanged during ordinary iteration." })),
+        turbo_full_pass_steps: Type.Optional(Type.Union([Type.Integer({ minimum: 2, maximum: 100 }), Type.Null()], { description: "Advanced Sampling setup for Raw → Turbo. A complete Turbo pass would use this count; default 12. Only the suffix after the Raw handoff executes. null restores 12. Leave unchanged during ordinary iteration." })),
         guidance: Type.Optional(
           Type.Union([Type.Null(), Type.Number({
             minimum: 0,
             maximum: 20,
             description:
-              "Only the raw-int8 route has a usable guidance dial. The turbo-int8 and raw-int8-turbo-lora routes are distilled and sample at a fixed cfg, so their guidance is pinned at 0.0 and setting anything else there fails. Raising it does not sharpen or strengthen a distilled result, it wrecks it. null restores AUTO.",
+              "Raw guidance; CFG equals this value + 1. Raw defaults to 3.5, Raw → Turbo to 3.0 (CFG 4), affecting only its raw stage. Turbo (raw-int8-turbo-lora) is fixed at guidance 0; raising it fails and degrades output. The hybrid turbo stage always uses CFG 1. null restores AUTO.",
           })]),
         ),
         seed: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9]+$", description: "Exact decimal seed; copy seed_text. Range 0 through 9223372036854775807." }), Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()], { description: "Use a decimal string for an exact seed. null selects a fresh random seed per run." })),
         negative_prompt: Type.Optional(
           Type.String({
             description:
-              "Only the raw-int8 route uses a negative prompt. The turbo-int8 and raw-int8-turbo-lora routes sample without classifier-free guidance and ignore it, so setting one there fails.",
+              "Used by Raw and only the raw opening of Raw → Turbo. Turbo (raw-int8-turbo-lora) ignores it, so setting one there fails.",
           }),
         ),
         loras: Type.Optional(

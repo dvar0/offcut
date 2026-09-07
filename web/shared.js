@@ -130,12 +130,11 @@ export function escapeHtml(value) {
 }
 
 export function presetLabel(preset) {
+  if (preset === "turbo-int8") return "TURBO (LEGACY CHECKPOINT)";
   return state.presets[preset]?.label?.toUpperCase() || String(preset || "").toUpperCase();
 }
 
-// Guidance is only a setting on the raw route. The other two sample against zero conditioning at
-// a fixed 0.0, so printing it there would read as a dial someone chose rather than as one the
-// route does not have.
+// Hybrid guidance belongs only to its raw opening; Turbo is always fixed at CFG 1.
 export function frameUsesGuidance(image) {
   return routeUsesGuidance(image.preset);
 }
@@ -143,7 +142,7 @@ export function frameUsesGuidance(image) {
 // One copy of the rule, because the cover recipe disables its own guidance field on exactly the
 // same routes and a second literal here would drift from this one.
 export function routeUsesGuidance(preset) {
-  return preset === "raw-int8";
+  return preset === "raw-int8" || preset === "raw-int8-to-turbo";
 }
 
 export function isReference(image) {
