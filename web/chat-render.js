@@ -593,6 +593,11 @@ function renderMessage(message, { streaming = false } = {}) {
   if (role === "user" && message.mode_change) body.append(renderModeChange(message.mode_change));
   if (role === "user" && message.workspace_change) body.append(renderWorkspaceChange(message.workspace_change));
   for (const image of messageImages(message)) body.append(createImageCard(image));
+  if (message.error) {
+    const notice = document.createElement("p");
+    notice.textContent = `Model request failed: ${message.error}`;
+    body.append(notice);
+  }
   // The model is between blocks: the turn started but nothing has arrived, or a tool
   // finished and the next token has not landed. Keep a heartbeat on screen either way.
   if (streaming) {

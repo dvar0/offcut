@@ -109,6 +109,8 @@ class PromptTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["model"], settings["enhancer"]["model"])
         self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        self.assertEqual(request.get_header("User-agent"), "offcut-cli/1.0")
+        self.assertRegex(request.get_header("X-opencode-session"), r"^[0-9a-f-]{36}$")
 
 
 class LoraTests(unittest.TestCase):

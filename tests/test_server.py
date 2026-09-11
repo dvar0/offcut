@@ -14,7 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import offcut_cli
 import offcut_server
@@ -204,6 +204,7 @@ class ValidationTests(unittest.TestCase):
                 pass
 
             def do_GET(self):
+                self.server.last_headers = self.headers
                 body = json.dumps({"data": [{"id": "mock-vision"}, {"id": "mock-fast"}]}).encode()
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json")
@@ -215,6 +216,8 @@ class ValidationTests(unittest.TestCase):
                 length = int(self.headers.get("Content-Length", "0"))
                 request = json.loads(self.rfile.read(length))
                 self.server.last_request = request
+                self.server.last_headers = self.headers
+                self.server.last_path = self.path
                 body = json.dumps(
                     {
                         "choices": [
@@ -249,6 +252,7 @@ class ValidationTests(unittest.TestCase):
                     offcut_server.discover_connection_models(connection),
                     ["mock-fast", "mock-vision"],
                 )
+                self.assertIsNone(server.last_headers.get("x-opencode-session"))
                 result = offcut_server.enhance_with_connection(
                     "a fox icon",
                     ["muted sketch style"],
@@ -259,6 +263,25 @@ class ValidationTests(unittest.TestCase):
             user_message = server.last_request["messages"][1]["content"]
             self.assertIn("muted sketch style", user_message)
             self.assertIn("app will prepend", user_message)
+            self.assertIsNone(server.last_headers.get("x-opencode-session"))
+            sessions = set()
+            connection["protocol"] = "opencode-go"
+            with patch.object(offcut_server.STORE, "get_connection_key", return_value="test-key"):
+                for model, path in (
+                    ("glm-5.3-flash", "/v1/chat/completions"),
+                    ("qwen3.8-flash", "/v1/messages"),
+                    ("muse-spark-1.2-contributor", "/v1/responses"),
+                ):
+                    self.assertEqual(
+                        offcut_server.enhance_with_connection("a fox", [], connection, model),
+                        "a precise geometric fox mark",
+                    )
+                    self.assertEqual(server.last_path, path)
+                    self.assertEqual(server.last_headers["User-Agent"], "offcut/1.0")
+                    session_id = server.last_headers["x-opencode-session"]
+                    self.assertRegex(session_id, r"^[0-9a-f-]{36}$")
+                    sessions.add(session_id)
+            self.assertEqual(len(sessions), 3)
         finally:
             server.shutdown()
             server.server_close()
@@ -888,6 +911,41 @@ class ChatServerTests(unittest.TestCase):
         self.assertEqual(stored[0]["image_context"][0]["raw_prompt"], "copper fox source prompt")
         self.assertEqual(stored[1]["content"][0]["thinkingSignature"], "private-signature")
         self.assertEqual(self.store.get_chat(chat["id"])["title"], "Design a fox mark")
+
+    def test_provider_error_is_visible_persisted_and_not_marked_complete(self):
+        for content in ([], [{"type": "text", "text": "Partial answer"}]):
+            with self.subTest(content=content):
+                chat = self.create_chat()
+                context = offcut_server.prepare_chat_turn(chat["id"], {
+                    "message": "Help with this board",
+                    "workspace": {"board_id": self.board["id"]},
+                    "workspace_revision": 0,
+                })
+                message = {
+                    "role": "assistant", "content": content, "stopReason": "error",
+                    "errorMessage": '400 unknown field "thinking" super-secret-key',
+                }
+                lines = [
+                    {"type": "event", "event": {"type": "message_end", "message": {
+                        "role": "user", "content": context["message"],
+                    }}},
+                    {"type": "event", "event": {"type": "message_end", "message": message}},
+                    {"type": "done"},
+                ]
+                run = Mock(cancel_event=threading.Event())
+                run.process.stdout = io.StringIO("".join(json.dumps(line) + "\n" for line in lines))
+                with patch.object(offcut_server, "finish_chat_bridge"), self.assertLogs(level="ERROR") as logs:
+                    offcut_server.drive_chat_turn(context, run)
+                events = [call.args[0] for call in run.publish.call_args_list]
+                self.assertEqual([event["type"] for event in events], ["message_end", "error", "done"])
+                self.assertIn('unknown field "thinking"', events[1]["error"])
+                stored = self.store.list_chat_messages(chat["id"])
+                self.assertEqual([m["role"] for m in stored], ["user", "assistant"])
+                public = offcut_server.public_chat_messages(stored)[1]
+                self.assertEqual(public["error"], events[1]["error"])
+                self.assertEqual(public["content"], "Partial answer" if content else "")
+                self.assertEqual(self.store.list_chat_turns(chat["id"])[0]["status"], "failed")
+                self.assertNotIn("super-secret-key", json.dumps([stored, events, logs.output]))
 
     def test_historical_image_references_do_not_reinflate_pixels(self):
         from PIL import Image

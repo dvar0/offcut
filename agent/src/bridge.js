@@ -79,6 +79,18 @@ export class ToolRequestBroker {
 }
 
 export function directStream(model, context, options) {
+  // These low-level Pi adapters do not add Go's conversation header. Keep it here so
+  // every protocol and every tool-loop continuation uses the persisted chat ID.
+  if (model.provider === "opencode-go") {
+    options = {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "User-Agent": "offcut/1.0",
+        ...(options?.sessionId ? { "x-opencode-session": options.sessionId } : {}),
+      },
+    };
+  }
   if (model.api === "openai-completions") return streamChat(model, context, options);
   if (model.api === "openai-responses") return streamResponses(model, context, options);
   if (model.api === "anthropic-messages") return streamAnthropic(model, context, options);

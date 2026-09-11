@@ -56,7 +56,7 @@ test("model construction reuses catalog capabilities and overrides endpoint", ()
   assert.equal(model.reasoning, true);
 });
 
-test("OpenCode Go GLM 5.3 Flash uses catalog capabilities and Z.ai thinking compat", () => {
+test("OpenCode Go GLM 5.3 uses catalog compat without native Z.ai thinking fields", () => {
   const connection = { protocol: "opencode-go", base_url: "https://opencode.ai/zen/go/v1" };
   const model = buildModel(connection, "glm-5.3-flash");
   assert.deepEqual(model.input, ["text", "image"]);
@@ -64,8 +64,8 @@ test("OpenCode Go GLM 5.3 Flash uses catalog capabilities and Z.ai thinking comp
   assert.equal(model.compat.supportsStore, false);
   assert.equal(model.compat.supportsDeveloperRole, false);
   assert.equal(model.compat.maxTokensField, "max_tokens");
-  assert.equal(model.compat.thinkingFormat, "zai");
-  assert.equal(buildModel(connection, "glm-5.3").compat.thinkingFormat, "zai");
+  assert.equal(model.compat.thinkingFormat, undefined);
+  assert.equal(buildModel(connection, "glm-5.3").compat.thinkingFormat, undefined);
   assert.deepEqual(describeModel(connection, "glm-5.3-flash"), {
     api: "openai-completions",
     vision: true,

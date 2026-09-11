@@ -736,6 +736,9 @@ def connection_request(
     if payload is not None:
         headers["Content-Type"] = "application/json"
         headers["anthropic-version"] = "2023-06-01"
+        if connection["protocol"] == "opencode-go" or offcut_cli.is_opencode_go_endpoint(base_url):
+            # Each enhancement is a standalone conversation; discovery GETs are not turns.
+            headers["x-opencode-session"] = str(uuid.uuid4())
         data = json.dumps(payload).encode("utf-8")
         method = "POST"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -1574,6 +1577,8 @@ def public_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
             public["attachments" if role == "user" else "images"] = images
         if role == "assistant":
             public["usage"] = public_usage(message.get("usage"))
+            if message.get("stopReason") == "error":
+                public["error"] = str(message.get("errorMessage") or "The model could not complete this turn.")
             tools = []
             # `blocks` keeps prose, reasoning, and tool calls in the order the model
             # produced them. The flattened `content`/`reasoning`/`tools` fields stay
@@ -3157,6 +3162,11 @@ def drive_chat_turn(context: dict[str, Any], run: ActiveChatRun) -> None:
                 event = envelope.get("event")
                 if isinstance(event, dict) and event.get("type") == "message_end":
                     message = event.get("message")
+                    if isinstance(message, dict) and message.get("role") == "assistant" and message.get("stopReason") == "error":
+                        message = {**message, "errorMessage": redact_bridge_error(
+                            message.get("errorMessage") or "The model could not complete this turn.", api_key
+                        )}
+                        event = {**event, "message": message}
                     clean = sanitize_pi_value(message, known_ids, preserve_private=True)
                     if isinstance(clean, dict) and clean.get("role") in ("user", "assistant", "toolResult"):
                         if clean.get("role") == "user":
@@ -3208,6 +3218,11 @@ def drive_chat_turn(context: dict[str, Any], run: ActiveChatRun) -> None:
                 public_event = normalized_bridge_event(event)
                 if public_event is not None:
                     emit(public_event)
+                    # Pi resolves prompt() even on a provider failure and then sends done.
+                    # Treat the failed assistant message as terminal before that success envelope.
+                    if public_event.get("type") == "message_end" and public_event["message"].get("error"):
+                        context["manifest"]["status"] = "failed"
+                        raise RuntimeError(public_event["message"]["error"])
                 continue
             if envelope_type == "error":
                 terminal_envelope = True

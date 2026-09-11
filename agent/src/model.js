@@ -43,11 +43,9 @@ export function buildModel(connection, modelId) {
   const { compat: catalogCompat, ...catalogMetadata } = catalog ?? {};
   const inferred = inferModelCapabilities(modelId);
   const provider = connection.protocol === "opencode-go" ? "opencode-go" : "offcut-custom";
-  const isOpenCodeGoGlm53 =
-    provider === "opencode-go" && (modelId === "glm-5.3" || modelId === "glm-5.3-flash");
   const compat =
     catalog?.api === api && catalogCompat
-      ? { ...catalogCompat, ...(isOpenCodeGoGlm53 ? { thinkingFormat: "zai" } : {}) }
+      ? { ...catalogCompat }
       : undefined;
 
   return {

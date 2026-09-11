@@ -19,11 +19,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -508,6 +510,11 @@ def clean_enhanced_prompt(text: str) -> str:
     return " ".join(text.split())
 
 
+def is_opencode_go_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(endpoint)
+    return parsed.hostname == "opencode.ai" and parsed.path.startswith("/zen/go/")
+
+
 def enhance_prompt(prompt: str, trigger_prefix: str, settings: dict[str, Any], *, lora_names: list[str] | None = None) -> str:
     enhancer = settings["enhancer"]
     key_env = enhancer["api_key_env"]
@@ -546,6 +553,8 @@ def enhance_prompt(prompt: str, trigger_prefix: str, settings: dict[str, Any], *
             "Accept": "application/json",
             "Content-Type": "application/json",
             "User-Agent": "offcut-cli/1.0",
+            # Enhancement is a standalone one-request conversation.
+            **({"x-opencode-session": str(uuid.uuid4())} if is_opencode_go_endpoint(enhancer["endpoint"]) else {}),
         },
         method="POST",
     )

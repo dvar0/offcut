@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import test from "node:test";
+import { directStream } from "../src/bridge.js";
+import { buildModel } from "../src/model.js";
 
 test("bridge completes a streamed OpenAI-compatible turn", async (t) => {
   let providerRequest;
@@ -10,7 +12,7 @@ test("bridge completes a streamed OpenAI-compatible turn", async (t) => {
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
-      providerRequest = { url: request.url, authorization: request.headers.authorization, body: JSON.parse(body) };
+      providerRequest = { url: request.url, headers: request.headers, authorization: request.headers.authorization, body: JSON.parse(body) };
       response.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -104,9 +106,12 @@ test("bridge completes a streamed OpenAI-compatible turn", async (t) => {
   );
   assert.equal(providerRequest.url, "/v1/chat/completions");
   assert.equal(providerRequest.authorization, "Bearer test-secret");
+  assert.equal(providerRequest.headers["user-agent"], "offcut/1.0");
+  assert.equal(providerRequest.headers["x-opencode-session"], "integration-session");
   assert.match(providerRequest.body.messages[0].content, /Offcut workspace agent/);
   assert.equal(providerRequest.body.reasoning_effort, "high");
-  assert.deepEqual(providerRequest.body.thinking, { type: "enabled", clear_thinking: false });
+  // Go accepts OpenAI reasoning_effort; its upstream rejects Z.ai's native thinking object.
+  assert.equal(Object.hasOwn(providerRequest.body, "thinking"), false);
   assert.equal(
     lines
       .filter(
@@ -121,6 +126,7 @@ test("bridge completes a streamed OpenAI-compatible turn", async (t) => {
 
 test("a generated image reaches the provider as labelled tool output, not a user turn", async (t) => {
   const requests = [];
+  const requestHeaders = [];
   const chunk = (delta, finish = null, extra = {}) =>
     `data: ${JSON.stringify({
       id: "chatcmpl-test",
@@ -137,6 +143,7 @@ test("a generated image reaches the provider as labelled tool output, not a user
     request.on("data", (piece) => { body += piece; });
     request.on("end", () => {
       requests.push(JSON.parse(body));
+      requestHeaders.push(request.headers);
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       if (requests.length === 1) {
         response.write(chunk({
@@ -211,6 +218,9 @@ test("a generated image reaches the provider as labelled tool output, not a user
   assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 0, stderr);
 
   assert.equal(requests.length, 2, stdout);
+  assert.deepEqual(requestHeaders.map((headers) => headers["x-opencode-session"]), [
+    "tool-image-session", "tool-image-session",
+  ]);
   const sent = requests[1].messages;
   const carrier = sent.at(-1);
   assert.equal(sent.at(-2).role, "tool");
@@ -227,4 +237,38 @@ test("a generated image reaches the provider as labelled tool output, not a user
     .map((line) => JSON.parse(line))
     .find((line) => line.event?.type === "message_end" && line.event.message?.role === "toolResult");
   assert.deepEqual(toolResult.event.message.content.at(-1), { type: "imageRef", imageId: "new-frame" });
+});
+
+test("Go identifies conversations on all three wire protocols", async (t) => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, headers: request.headers });
+    request.resume();
+    // A terminal provider error is enough to inspect the actual SDK request without retries.
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: { type: "invalid_request_error", message: "test endpoint" } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const connection = { protocol: "opencode-go", base_url: `http://127.0.0.1:${server.address().port}/v1` };
+  const context = { messages: [{ role: "user", content: "Hello", timestamp: 1 }] };
+  for (const [modelId, endpoint] of [
+    ["glm-5.3-flash", "/v1/chat/completions"],
+    ["qwen3.8-flash", "/v1/messages"],
+    ["muse-spark-1.2-contributor", "/v1/responses"],
+  ]) {
+    for (const sessionId of ["chat-one", "chat-one", "chat-two"]) {
+      await directStream(buildModel(connection, modelId), context, { apiKey: "test-key", sessionId }).result();
+      const sent = requests.at(-1);
+      assert.equal(new URL(sent.url, connection.base_url).pathname, endpoint);
+      assert.equal(sent.headers["x-opencode-session"], sessionId);
+      assert.equal(sent.headers["user-agent"], "offcut/1.0");
+    }
+  }
+  assert.equal(requests.length, 9);
+  await directStream(buildModel({ ...connection, protocol: "chat" }, "mock-model"), context, {
+    apiKey: "test-key", sessionId: "other-provider-chat",
+  }).result();
+  assert.equal(requests.length, 10);
+  assert.equal(requests.at(-1).headers["x-opencode-session"], undefined);
 });
