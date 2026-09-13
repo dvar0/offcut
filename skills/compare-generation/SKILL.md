@@ -11,4 +11,4 @@ Use the brief to retain the question and baseline when the experiment spans turn
 
 For art-style transfer, distinguish paint/texture/edge behavior from the original subject's colors, scenery, and composition. When the user requests testing before saving, use contrasting subjects that expose leakage and keep trial wording separate from the saved library entry until a revision is requested. For scene recipes, preserve the requested composition rather than applying the art-style exclusion rule.
 
-Stay within the requested variants and the turn allowance. Report which image answers which treatment and the visible tradeoffs. Preserve the best candidate or restore the baseline when the user requests it; do not declare a universal model limitation from a few unsuccessful samples.
+Stay within the requested variants. Report which image answers which treatment and the visible tradeoffs. Preserve the best candidate or restore the baseline when the user requests it; do not declare a universal model limitation from a few unsuccessful samples.

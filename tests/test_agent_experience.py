@@ -6,7 +6,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image
 import offcut_server as server
@@ -270,6 +270,129 @@ class AgentExperienceTests(unittest.TestCase):
         attempts = self.store.list_chat_attempts(self.chat["id"])
         self.assertEqual(attempts[1]["observation"], "Castle remains central")
         self.assertEqual(attempts[1]["recipe"]["seed"], "9007199254740993")
+
+    def test_unlimited_default_is_absent_from_model_context_and_tool_receipts(self):
+        source = self.frame()
+        context = self.turn()
+        self.assertEqual(self.store.get_chat(self.chat["id"])["generation_limit"], 0)
+        self.assertNotIn("generation_limit", context["agent_prompt"])
+        self.assertNotIn("generations_this_turn", context["agent_prompt"])
+        self.assertNotIn("allowance", context["system_prompt"])
+        workspace = server.execute_chat_tool(context, "get_workspace_state", {})
+        self.assertNotIn("generations_remaining", workspace)
+        with patch.object(server.STATE, "generate", return_value={"image": source}):
+            for _ in range(6):
+                receipt = server.execute_chat_tool(context, "generate_image", {})
+                self.assertNotIn("generations_remaining", receipt)
+        self.assertEqual(len(self.store.list_chat_attempts(self.chat["id"])), 6)
+        with patch.object(server, "generate_library_cover", return_value={"entry": {"name": "example"}, "target_kind": "lora", "image_id": source["id"]}):
+            receipt = server.execute_chat_tool(context, "generate_cover", {"target_kind": "lora", "target": "example"})
+        self.assertNotIn("generations_remaining", receipt)
+
+    def test_explicit_limit_can_be_applied_and_cleared(self):
+        self.store.update_chat(self.chat["id"], {"generation_limit": 2})
+        context = self.turn()
+        self.assertIn('"generation_limit":2', context["agent_prompt"])
+        self.assertIn("ceiling", context["system_prompt"])
+        self.assertEqual(server.execute_chat_tool(context, "get_workspace_state", {})["generations_remaining"], 2)
+        for invalid in (-1, 51, True, 1.5, "4", None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.store.update_chat(self.chat["id"], {"generation_limit": invalid})
+        self.store.append_chat_messages(self.chat["id"], [{"role": "toolResult", "toolName": "get_workspace_state",
+            "content": [{"type": "text", "text": '{"generations_remaining":2}'}]}])
+        self.store.update_chat(self.chat["id"], {"generation_limit": 0})
+        later = self.turn()
+        self.assertNotIn("generation_limit", later["agent_prompt"])
+        self.assertNotIn("generations_remaining", json.dumps(later["messages"]))
+
+    def drive_events(self, context, events, stop_at_end=True):
+        run = Mock(cancel_event=threading.Event())
+        def lines():
+            for event in events:
+                yield json.dumps(event) + "\n"
+            if stop_at_end:
+                run.cancel_event.set()
+        run.process.stdout = lines()
+        with patch.object(server, "finish_chat_bridge"):
+            server.drive_chat_turn(context, run)
+        return run
+
+    def test_stop_keeps_prior_turns_completed_work_and_partial_output_for_followup(self):
+        self.store.append_chat_messages(self.chat["id"], [
+            {"role": "user", "content": "Start with a lake"},
+            {"role": "assistant", "content": [{"type": "text", "text": "A lake with two hills."}]},
+        ])
+        context = self.turn()
+        partial = {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "Try a lower viewpoint", "thinkingSignature": "unfinished-signature"},
+            {"type": "text", "text": "The cabin could move"},
+        ]}
+        run = self.drive_events(context, [
+            {"type": "event", "event": {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "I inspected the first candidate."}]}}},
+            {"type": "event", "event": {"type": "message_update", "message": partial,
+                "assistantMessageEvent": {"type": "text_delta", "delta": "The cabin could move"}}},
+            # No message_end or done: the watchdog killed a hung provider at Stop.
+        ])
+        stored = self.store.list_chat_messages(self.chat["id"])
+        self.assertEqual(len(stored), 6)
+        self.assertEqual(server.message_text(stored[-2]), "The cabin could move")
+        self.assertTrue(stored[-1]["interrupted"])
+        self.assertTrue(server.public_chat_messages(stored)[-1]["interrupted"])
+        self.assertEqual(self.store.list_chat_turns(self.chat["id"])[0]["status"], "stopped")
+        self.assertFalse(any(call.args[0]["type"] == "error" for call in run.publish.call_args_list))
+        later = self.turn(message="Keep the cabin. Change the sky instead.")
+        replay = json.dumps(later["messages"])
+        for text in ("Start with a lake", "I inspected the first candidate", "Try a lower viewpoint", "The cabin could move", "user stopped"):
+            self.assertIn(text, replay)
+        self.assertNotIn("unfinished-signature", replay)
+        self.assertNotIn('"stopReason": "aborted"', replay)
+
+    def test_stop_keeps_a_generation_receipt_even_if_bridge_never_echoes_it(self):
+        for graceful in (False, True):
+            with self.subTest(graceful=graceful):
+                self.chat = self.store.create_chat(self.board["id"], None, "vision-model", "create")
+                source = self.frame()
+                context = self.turn()
+                calls = [{"type": "toolCall", "id": "render", "name": "generate_image", "arguments": {}},
+                         {"type": "toolCall", "id": "queued", "name": "generate_image", "arguments": {}}]
+                events = [
+                    {"type": "event", "event": {"type": "message_end", "message": {"role": "assistant", "content": calls}}},
+                    {"type": "tool_request", "requestId": "1", "toolCallId": "render", "name": "generate_image", "args": {}},
+                ]
+                if graceful:
+                    events += [{"type": "event", "event": {"type": "message_end", "message": {
+                        "role": "toolResult", "toolCallId": "render", "toolName": "generate_image", "isError": True,
+                        "content": [{"type": "text", "text": "Agent turn aborted"}],
+                    }}}]
+                events += [{"type": "tool_request", "requestId": "2", "toolCallId": "queued", "name": "generate_image", "args": {}}]
+                def generate(payload, cancel_event):
+                    cancel_event.set()  # Stop lands just as the frame completes.
+                    return {"image": source}
+                with patch.object(server.STATE, "generate", side_effect=generate) as inference:
+                    self.drive_events(context, events)
+                inference.assert_called_once()
+                stored = self.store.list_chat_messages(self.chat["id"])
+                receipts = [m for m in stored if m["role"] == "toolResult"]
+                self.assertEqual([m["toolCallId"] for m in receipts], ["render", "queued"])
+                self.assertFalse(receipts[0]["isError"])
+                self.assertEqual(receipts[0]["details"]["image_id"], source["id"])
+                self.assertTrue(receipts[1]["isError"])
+                tools = server.public_chat_messages(stored)[1]["tools"]
+                self.assertEqual(tools[0]["image_id"], source["id"])
+                self.assertEqual(tools[0]["status"], "complete")
+                self.assertEqual(tools[1]["status"], "error")
+                self.assertIn(source["id"], json.dumps(self.turn()["messages"]))
+
+    def test_stopping_compaction_does_not_hide_the_conversation(self):
+        self.attach_history([self.frame()])
+        context = self.turn(message="/compact")
+        self.drive_events(context, [{"type": "event", "event": {"type": "message_update",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Unfinished summary"}]},
+            "assistantMessageEvent": {"type": "text_delta", "delta": "Unfinished summary"}}}])
+        chat = self.store.get_chat(self.chat["id"])
+        self.assertEqual(chat["compacted_before"], 0)
+        self.assertFalse(chat["summary"])
+        self.assertIn("Use these references", json.dumps(self.turn()["messages"]))
 
     def test_visual_review_requires_image_evidence_and_never_implies_approval(self):
         image = self.frame()

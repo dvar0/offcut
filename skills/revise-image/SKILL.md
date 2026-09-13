@@ -15,4 +15,4 @@ Generation is text-to-image. A same-seed prompt change can rearrange the entire 
 
 On each important attempt, name the correction in `change_note`, inspect the actual returned frame, then use `review_attempt` to record the observed change and any regression. Compare against the best accepted image. A missing detail remains missing even when the prompt describes it. Distinguish uncertainty from success, and predictions from rendered results.
 
-Respect requests to discuss or edit without generating. The turn's allowance is a ceiling. After repeated regressions, stop and compare the strongest candidates with the unresolved requirement; do not keep adding increasingly specific clauses or claim a seed will guarantee the missing element. Never trade away an accepted requirement silently to call a result finished.
+Respect requests to discuss or edit without generating. After repeated regressions, stop and compare the strongest candidates with the unresolved requirement; do not keep adding increasingly specific clauses or claim a seed will guarantee the missing element. Never trade away an accepted requirement silently to call a result finished.

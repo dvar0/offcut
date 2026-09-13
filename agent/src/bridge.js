@@ -37,6 +37,7 @@ export class ToolRequestBroker {
     this.send = send;
     this.nextId = 1;
     this.pending = new Map();
+    this.cancelled = new Set();
   }
 
   request({ toolCallId, name, args }, signal, onUpdate) {
@@ -45,6 +46,7 @@ export class ToolRequestBroker {
     return new Promise((resolve, reject) => {
       const onAbort = () => {
         this.pending.delete(requestId);
+        this.cancelled.add(requestId);
         reject(abortError());
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -54,6 +56,9 @@ export class ToolRequestBroker {
   }
 
   respond(command) {
+    // An in-flight Python tool may settle after the abort command crossed stdin.
+    // Its late receipt must not turn a graceful stop into a bridge failure.
+    if (this.cancelled.has(String(command.requestId))) return;
     const pending = this.pending.get(String(command.requestId));
     if (!pending) throw new Error(`Unknown tool response requestId: ${String(command.requestId)}`);
 
@@ -72,6 +77,7 @@ export class ToolRequestBroker {
   abortAll() {
     for (const [requestId, pending] of this.pending) {
       this.pending.delete(requestId);
+      this.cancelled.add(requestId);
       pending.signal?.removeEventListener("abort", pending.onAbort);
       pending.reject(abortError());
     }
@@ -138,7 +144,10 @@ export class JsonlAgentBridge {
       await this.runTurn(command);
       return;
     }
-    if (this.finished) throw new Error("Agent turn is already finished");
+    if (this.finished) {
+      if (command.type === "abort" || command.type === "tool_response") return;
+      throw new Error("Agent turn is already finished");
+    }
     if (command.type === "tool_response") {
       this.broker.respond(command);
       return;

@@ -947,6 +947,77 @@ class ChatServerTests(unittest.TestCase):
                 self.assertEqual(self.store.list_chat_turns(chat["id"])[0]["status"], "failed")
                 self.assertNotIn("super-secret-key", json.dumps([stored, events, logs.output]))
 
+    def test_real_bridge_stop_and_followup_keep_provider_context(self):
+        """Exercise Pi's actual replay/token accounting against a local streaming provider."""
+        requests = []
+        release_provider = threading.Event()
+
+        class Provider(offcut_server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                text = "Partial cabin direction" if len(requests) == 1 else "Changed the sky"
+                self.wfile.write(("data: " + json.dumps({"id": "mock", "object": "chat.completion.chunk", "created": 1,
+                    "model": "plain-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]}) + "\n\n").encode())
+                self.wfile.flush()
+                if len(requests) == 1:
+                    release_provider.wait(10)
+                else:
+                    self.wfile.write(("data: " + json.dumps({"id": "mock", "object": "chat.completion.chunk", "created": 1,
+                        "model": "plain-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}) + "\n\ndata: [DONE]\n\n").encode())
+
+        provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+        provider.daemon_threads = True
+        threading.Thread(target=provider.serve_forever, daemon=True).start()
+        self.addCleanup(provider.server_close)
+        self.addCleanup(provider.shutdown)
+        self.addCleanup(release_provider.set)
+        self.store.save_connection({"id": "chat-provider", "base_url": f"http://127.0.0.1:{provider.server_port}/v1", "models": ["plain-model"]})
+        chat = self.create_chat()
+        partial_seen = threading.Event()
+        events = []
+        failures = []
+
+        def turn(message):
+            request = urllib.request.Request(f"{self.base_url}/api/chats/{chat['id']}/turn",
+                data=json.dumps({"message": message, "workspace": {"board_id": self.board["id"]}, "workspace_revision": 0}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    for line in response:
+                        event = json.loads(line)
+                        events.append(event)
+                        if event["type"] == "text_delta":
+                            partial_seen.set()
+            except Exception as exc:
+                failures.append(exc)
+
+        reader = threading.Thread(target=turn, args=("Explore the cabin",), daemon=True)
+        reader.start()
+        self.assertTrue(partial_seen.wait(10), failures)
+        self.request(f"/api/chats/{chat['id']}/abort", {})
+        reader.join(10)
+        self.assertFalse(reader.is_alive())
+        self.assertFalse(failures)
+        self.assertFalse(any(e["type"] == "error" for e in events), events)
+        detail = self.request(f"/api/chats/{chat['id']}")
+        self.assertFalse(detail["chat"]["running"])
+        self.assertTrue(detail["messages"][-1]["interrupted"])
+        self.assertIn("Partial cabin direction", json.dumps(detail["messages"]))
+        turn("Change the sky")
+        self.assertFalse(failures)
+        self.assertFalse(any(e["type"] == "error" for e in events), events)
+        self.assertEqual(len(requests), 2)
+        self.assertIn("Partial cabin direction", json.dumps(requests[1]["messages"]))
+        self.assertIn("user stopped", json.dumps(requests[1]["messages"]))
+        self.assertNotIn("generation_limit", json.dumps(requests))
+        self.assertIn("Changed the sky", json.dumps(self.request(f"/api/chats/{chat['id']}")["messages"]))
+
     def test_historical_image_references_do_not_reinflate_pixels(self):
         from PIL import Image
 

@@ -248,7 +248,9 @@ export function renderConversationHeader() {
   $("#conversationTitle").textContent = chat.title || "Untitled chat";
   const connection = state.connections.find((item) => item.id === chat.connection_id);
   $("#conversationMeta").textContent = connection?.name || "Connected model";
-  $("#chatBrief").title = `Creative brief · up to ${chat.generation_limit || 4} generations per reply`;
+  $("#chatBrief").title = chat.generation_limit
+    ? `Creative brief · up to ${chat.generation_limit} generations per reply`
+    : "Creative brief · unlimited generations";
   const modelSelect = $("#chatModel");
   modelSelect.replaceChildren();
   // With the setup screen gone this is the only place a chat's backend profile can still change,
@@ -413,8 +415,8 @@ export async function sendChatTurn(event) {
     }
   } finally {
     state.chatAbortController = null;
-    if (state.chatStreaming) setChatStreaming(false);
     if (initiated) await refreshCurrentChat();
+    if (state.chatStreaming) setChatStreaming(false);
   }
 }
 
@@ -719,11 +721,16 @@ async function refreshCurrentChat() {
 
 async function stopChatTurn() {
   if (!state.currentChat || !state.chatStreaming) return;
-  const controller = state.chatAbortController;
+  $("#stopChat").disabled = true;
+  setTurnPhase("STOPPING");
   try {
     await api(`/api/chats/${encodeURIComponent(state.currentChat.id)}/abort`, { method: "POST", body: "{}" });
-  } catch (_) { /* Aborting the local fetch still returns control to the user. */ }
-  controller?.abort();
+    // Keep reading until the server has saved the interrupted turn and closed it.
+    // Refreshing before that hides the turn behind its live-replay watermark.
+  } catch (error) {
+    showChatNotice(`Could not stop the turn: ${error.message}`);
+    $("#stopChat").disabled = false;
+  }
 }
 
 // Reattach to a turn the server is still running after a refresh or a reopened tab. The
@@ -757,8 +764,8 @@ async function resumeChatTurn(chatId) {
     if (error.name !== "AbortError") showChatNotice(error.message || "Could not rejoin the running turn.");
   } finally {
     state.chatAbortController = null;
-    if (state.chatStreaming) setChatStreaming(false);
     await refreshCurrentChat();
+    if (state.chatStreaming) setChatStreaming(false);
   }
 }
 

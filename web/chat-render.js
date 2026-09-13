@@ -598,6 +598,11 @@ function renderMessage(message, { streaming = false } = {}) {
     notice.textContent = `Model request failed: ${message.error}`;
     body.append(notice);
   }
+  if (message.interrupted) {
+    const notice = document.createElement("p");
+    notice.textContent = "Stopped";
+    body.append(notice);
+  }
   // The model is between blocks: the turn started but nothing has arrived, or a tool
   // finished and the next token has not landed. Keep a heartbeat on screen either way.
   if (streaming) {

@@ -343,6 +343,18 @@ class StoreTests(unittest.TestCase):
         # The effort preference is not model-specific, so it outlives the model it was set beside.
         self.assertEqual(resynced["default_reasoning"], "high")
 
+    def test_new_chats_are_unlimited_even_with_the_old_column_default(self):
+        with self.store._connect() as db:
+            db.execute("ALTER TABLE chat_sessions DROP COLUMN generation_limit")
+            db.execute("ALTER TABLE chat_sessions ADD COLUMN generation_limit INTEGER NOT NULL DEFAULT 4")
+        board = self.store.create_board("Old database")
+        existing = self.store.create_chat(board["id"], None, "plain-model", "create")
+        self.store.update_chat(existing["id"], {"generation_limit": 4})
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.get_chat(existing["id"])["generation_limit"], 4)
+        fresh = reopened.create_chat(board["id"], None, "plain-model", "create")
+        self.assertEqual(fresh["generation_limit"], 0)
+
     def test_chat_lifecycle_messages_compaction_and_summaries(self):
         board = self.store.create_board("Agent board")
         chat = self.store.create_chat(board["id"], "opencode-go", "glm-5.2", "draft")

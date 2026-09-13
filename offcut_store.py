@@ -290,7 +290,7 @@ class Store:
             if "creative_brief_json" not in chat_columns:
                 db.execute("ALTER TABLE chat_sessions ADD COLUMN creative_brief_json TEXT NOT NULL DEFAULT '{}'")
             if "generation_limit" not in chat_columns:
-                db.execute("ALTER TABLE chat_sessions ADD COLUMN generation_limit INTEGER NOT NULL DEFAULT 4")
+                db.execute("ALTER TABLE chat_sessions ADD COLUMN generation_limit INTEGER NOT NULL DEFAULT 0")
             # Legacy modes remain readable in old messages, but all active chats use Create.
             db.execute("UPDATE chat_sessions SET permission_mode = 'create' WHERE permission_mode != 'create'")
             if "reasoning_effort" not in chat_columns:
@@ -877,8 +877,8 @@ class Store:
                 """INSERT INTO chat_sessions
                    (id, board_id, connection_id, model, permission_mode, system_mode,
                     notified_mode, reasoning_effort,
-                    workspace_revision, workspace_prompt, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     workspace_revision, workspace_prompt, created_at, updated_at, generation_limit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
                 (
                     chat_id,
                     board_id,
@@ -930,8 +930,8 @@ class Store:
                 raise ValueError("Chat not found")
             if "generation_limit" in payload:
                 limit = payload["generation_limit"]
-                if type(limit) is not int or not 1 <= limit <= 50:
-                    raise ValueError("Generation limit must be between 1 and 50")
+                if type(limit) is not int or not 0 <= limit <= 50:
+                    raise ValueError("Generation limit must be 0 (unlimited) or between 1 and 50")
                 assignments.append("generation_limit = ?")
                 parameters.append(limit)
             if "creative_brief" in payload:

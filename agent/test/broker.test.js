@@ -38,4 +38,6 @@ test("tool broker rejects pending requests on abort", async () => {
   );
   broker.abortAll();
   await assert.rejects(resultPromise, { name: "AbortError", message: "Agent turn aborted" });
+  assert.doesNotThrow(() => broker.respond({ requestId: "1", result: { image_id: "finished-at-stop" } }));
+  assert.throws(() => broker.respond({ requestId: "unknown", result: {} }), /Unknown tool response/);
 });

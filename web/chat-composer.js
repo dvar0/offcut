@@ -194,6 +194,7 @@ export function setChatStreaming(active) {
   state.streamBoardId = active ? state.currentBoardId : null;
   $("#sendChat").hidden = active;
   $("#stopChat").hidden = !active;
+  $("#stopChat").disabled = false;
   // The input stays enabled while a turn streams so a follow-up can be drafted
   // mid-reply. Sending is still blocked until the turn settles (the server
   // rejects overlapping turns), but the draft is kept.
@@ -585,7 +586,7 @@ export async function openBriefDialog() {
     $("#briefTradeoffs").value = (brief.accepted_tradeoffs || []).join("\n");
     $("#briefNext").value = brief.next_change || "";
     $("#briefFailed").value = (brief.failed_approaches || []).join("\n");
-    $("#briefLimit").value = data.chat.generation_limit || 4;
+    $("#briefLimit").value = data.chat.generation_limit || "";
     fillBriefImageSelect($("#briefApproved"), brief.approved_image_id);
     fillBriefImageSelect($("#briefBest"), brief.best_image_id);
     $("#briefReferences").replaceChildren();
